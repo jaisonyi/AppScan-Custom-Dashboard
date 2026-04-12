@@ -1,0 +1,11 @@
+{
+  "report_id": "r-0ff95556",
+  "name": "Scheduler Final",
+  "format": "json",
+  "filters": {
+    "template_id": null
+  },
+  "status": "completed",
+  "generated_at": "2026-04-01T12:38:01.103268+00:00",
+  "generated_by": "scheduler"
+}

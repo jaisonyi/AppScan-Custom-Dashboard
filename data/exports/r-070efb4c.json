@@ -1,0 +1,13 @@
+{
+  "report_id": "r-070efb4c",
+  "name": "Artifact Test",
+  "format": "json",
+  "filters": {
+    "severity": [
+      "high"
+    ]
+  },
+  "status": "queued",
+  "generated_at": "2026-03-31T18:17:58.101814+00:00",
+  "generated_by": "smoke-user"
+}

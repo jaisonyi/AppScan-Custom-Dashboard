@@ -1,0 +1,11 @@
+{
+  "report_id": "r-be44ade4",
+  "name": "Immediate Scheduler",
+  "format": "json",
+  "filters": {
+    "template_id": null
+  },
+  "status": "completed",
+  "generated_at": "2026-04-01T05:13:13.585754+00:00",
+  "generated_by": "scheduler"
+}

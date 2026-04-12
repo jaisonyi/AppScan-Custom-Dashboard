@@ -1,0 +1,11 @@
+{
+  "report_id": "r-a6866117",
+  "name": "Smoke Schedule",
+  "format": "json",
+  "filters": {
+    "template_id": null
+  },
+  "status": "completed",
+  "generated_at": "2026-04-01T12:45:01.390223+00:00",
+  "generated_by": "scheduler"
+}

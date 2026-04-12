@@ -1,0 +1,11 @@
+{
+  "report_id": "r-0bdc2bdd",
+  "name": "Every 7 min",
+  "format": "json",
+  "filters": {
+    "template_id": null
+  },
+  "status": "completed",
+  "generated_at": "2026-04-01T13:49:16.944803+00:00",
+  "generated_by": "scheduler"
+}
