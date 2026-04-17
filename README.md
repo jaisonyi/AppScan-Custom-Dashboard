@@ -91,17 +91,12 @@ File: main.bicep + main.parameters.json
 
 Creates 5 Azure resources:
 
-+-----------------------------------------------------------------------------+
-| Resource                                  | Purpose                         |
-+-------------------------------------------|---------------------------------+
-| App Service (B1, Linux/Docker)            | Runs the dashboard container    |
-| PostgreSQL Flexible Server (B1ms, v16)    | Application database            |
-| Key Vault (RBAC mode)                     | Stores JWT secret + DB password |
-| Application Insights                      | Metrics & logging               |
-| Log Analytics Workspace                   | Centralized logs                |
-+-----------------------------------------------------------------------------+
-
-
+Resource	Purpose
+App Service (B1, Linux/Docker)	Runs the dashboard container
+PostgreSQL Flexible Server (B1ms, v16)	Application database
+Key Vault (RBAC mode)	Stores JWT secret + DB password
+Application Insights	Metrics & logging
+Log Analytics Workspace	Centralized logs
 
 Deploy:
 
