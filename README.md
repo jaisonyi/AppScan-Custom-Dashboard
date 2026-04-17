@@ -1,9 +1,9 @@
 # AppScan Custom Dashboard
 
-Documentation-first monorepo for a read-only HCL AppScan on Cloud dashboard with multi-data-source aggregation.
+Documentation-first monorepo for a read-only HCL AppScan dashboard with multi-data-source aggregation.
 
 ## Core Principles
-- Read-only integration for all external ASoC calls
+- Read-only integration for all external ASoC and AppScan 360 calls
 - Multi-data-source support (endpoint registry with per-source SSL policy; UI toggle for self-signed cert environments)
 - Role and asset-group scoped access controls on all data endpoints
 - Cache-first analytics responses with refresh override paths
