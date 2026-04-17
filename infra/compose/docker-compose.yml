@@ -1,0 +1,46 @@
+# =============================================================================
+# Docker Compose — Local development / testing
+# Mirrors the Azure deployment topology (App Service + PostgreSQL)
+# =============================================================================
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: aspm
+    ports:
+      - "55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: "postgresql+psycopg://postgres:postgres@db:5432/aspm"
+      JWT_SECRET: "${JWT_SECRET:-change-me-in-production}"
+      FRONTEND_ORIGIN: "http://localhost:8000"
+      # ASoC credentials — set via .env file or env vars
+      ASOC_API_URL: "${ASOC_API_URL:-}"
+      ASOC_API_KEY_ID: "${ASOC_API_KEY_ID:-}"
+      ASOC_API_KEY_SECRET: "${ASOC_API_KEY_SECRET:-}"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pgdata:

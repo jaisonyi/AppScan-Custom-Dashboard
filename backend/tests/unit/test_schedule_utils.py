@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
-from croniter import CroniterBadCronError
 
 from app.workers.schedule_utils import compute_next_run_iso, ensure_valid_cron, utc_now
 

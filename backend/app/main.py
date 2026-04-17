@@ -9,7 +9,9 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
 from app.core.config.settings import settings
+from app.repositories import data_source_store
 from app.repositories.postgres_store import ensure_seed_data, init_db
+from app.services import data_source_service
 from app.workers.analytics_prewarm import run_analytics_prewarm
 from app.workers.report_scheduler import run_scheduler
 
@@ -43,7 +45,9 @@ app.add_middleware(
 @app.on_event("startup")
 async def on_startup() -> None:
     init_db()
+    data_source_store.ensure_table()
     ensure_seed_data()
+    data_source_service.bootstrap_from_env()
     app.state.scheduler_stop_event = asyncio.Event()
     app.state.scheduler_task = None
     if settings.report_scheduler_enabled:

@@ -1,15 +1,17 @@
 """Multi-endpoint support for ASoC read services.
 
-Reads all configured ASoC endpoints from settings and returns one
-``AsocReadService`` instance per endpoint.  Callers can iterate over the
-returned list and aggregate results from each endpoint independently.
+Reads all configured ASoC data sources from the ``data_sources`` DB table
+(with env-var fallback) and returns one ``AsocReadService`` instance per
+enabled source.  Results from :func:`aggregate_list` are tagged with
+``_data_source_id`` and ``_data_source_label`` so callers can distinguish
+items from different ASoC instances.
 
 Usage::
 
     from app.services.multi_endpoint import get_endpoint_services, aggregate_list
 
-    services = get_endpoint_services()   # one service per configured endpoint
-    all_scans = await aggregate_list("list_scans")   # merged from all endpoints
+    services = get_endpoint_services()   # one service per data source
+    all_scans = await aggregate_list("list_scans")   # merged + tagged
 """
 from __future__ import annotations
 
@@ -19,39 +21,63 @@ from typing import Any
 
 from app.core.config.settings import settings
 from app.services.asoc_read_service import AsocReadService
+from app.services import data_source_service
 
 logger = logging.getLogger(__name__)
 
 
-def get_endpoint_services() -> list[AsocReadService]:
-    """Return one :class:`AsocReadService` per configured ASoC endpoint.
+_MAX_DATA_SOURCE_IDS = 20
 
-    Reads ``settings.all_asoc_endpoints()`` which parses ``ASOC_ENDPOINTS_JSON``
-    (set by the installer for multi-endpoint deployments) before falling back to
-    the primary ``ASOC_SERVICE_URL`` / ``ASOC_API_KEY`` / ``ASOC_API_SECRET``
-    for single-endpoint configurations.
 
-    Returns an empty list when no credentials are configured (e.g., mock/dev
-    mode without any environment variables set).
+def _load_sources(
+    *,
+    data_source_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return the list of enabled data sources (DB-first, env fallback).
+
+    When *data_source_ids* is provided, only sources whose ``id`` is in that
+    list are returned.  Invalid / unknown IDs are silently dropped.  The list
+    is capped at :data:`_MAX_DATA_SOURCE_IDS` entries to prevent cache-key
+    proliferation.
     """
-    endpoints = settings.all_asoc_endpoints()
+    sources = data_source_service.list_all(include_disabled=False)
+    if data_source_ids:
+        valid_ids = {ds["id"] for ds in sources}
+        allowed = set(data_source_ids[:_MAX_DATA_SOURCE_IDS]) & valid_ids
+        sources = [ds for ds in sources if ds["id"] in allowed]
+    return sources
+
+
+def get_endpoint_services(
+    *,
+    data_source_ids: list[str] | None = None,
+) -> list[AsocReadService]:
+    """Return one :class:`AsocReadService` per enabled data source.
+
+    Loads data sources from the DB (falls back to env if DB is empty).
+    Returns an empty list when no data sources are configured.
+    """
+    sources = _load_sources(data_source_ids=data_source_ids)
     return [
-        AsocReadService.for_endpoint(ep["url"], ep["key"], ep["secret"])
-        for ep in endpoints
+        AsocReadService.for_endpoint(
+            ds["url"], ds["api_key"], ds["api_secret"],
+            verify=ds.get("verify_ssl", True),
+        )
+        for ds in sources
     ]
 
 
 def get_endpoint_labels() -> list[dict[str, str]]:
-    """Return label metadata for all configured endpoints.
+    """Return label metadata for all enabled data sources.
 
-    Useful for API responses that need to identify which endpoint a result
-    came from without exposing credentials.
+    Useful for API responses that need to identify which data source a
+    result came from without exposing credentials.
 
-    Returns a list of dicts with keys ``url`` and ``label``.
+    Returns a list of dicts with keys ``id``, ``url``, and ``label``.
     """
     return [
-        {"url": ep["url"], "label": ep["label"]}
-        for ep in settings.all_asoc_endpoints()
+        {"id": ds["id"], "url": ds["url"], "label": ds["label"]}
+        for ds in _load_sources()
     ]
 
 
@@ -61,8 +87,20 @@ async def _fetch_one(svc: AsocReadService, method: str, /, *args: Any, **kwargs:
     return result if isinstance(result, list) else []
 
 
-async def aggregate_list(method: str, /, *args: Any, **kwargs: Any) -> list[Any]:
-    """Call ``method`` on every configured endpoint service and concatenate results.
+async def aggregate_list(
+    method: str,
+    /,
+    *args: Any,
+    data_source_ids: list[str] | None = None,
+    **kwargs: Any,
+) -> list[Any]:
+    """Call ``method`` on every data source service and concatenate results.
+
+    Each item in the merged list is tagged with ``_data_source_id`` and
+    ``_data_source_label`` so callers can identify the origin.
+
+    When *data_source_ids* is provided, only the specified data sources are
+    queried — this avoids unnecessary ASoC API calls.
 
     Errors from individual endpoints are silently skipped so a single broken
     endpoint never blocks data from the others.  All errors are logged at
@@ -73,8 +111,14 @@ async def aggregate_list(method: str, /, *args: Any, **kwargs: Any) -> list[Any]
         scans = await aggregate_list("list_scans", use_mock_on_error=False)
         issues = await aggregate_list("list_issues_for_applications", app_ids)
     """
-    endpoints = settings.all_asoc_endpoints()
-    services = get_endpoint_services()
+    sources = _load_sources(data_source_ids=data_source_ids)
+    services = [
+        AsocReadService.for_endpoint(
+            ds["url"], ds["api_key"], ds["api_secret"],
+            verify=ds.get("verify_ssl", True),
+        )
+        for ds in sources
+    ]
     if not services:
         return []
     results = await asyncio.gather(
@@ -83,42 +127,55 @@ async def aggregate_list(method: str, /, *args: Any, **kwargs: Any) -> list[Any]
     )
     merged: list[Any] = []
     for idx, result in enumerate(results):
+        ds = sources[idx] if idx < len(sources) else {}
+        ds_id = ds.get("id", f"unknown-{idx}")
+        ds_label = ds.get("label", f"endpoint[{idx}]")
+        ds_url = ds.get("url", "unknown")
         if isinstance(result, BaseException):
-            endpoint_label = endpoints[idx]["label"] if idx < len(endpoints) else f"endpoint[{idx}]"
-            endpoint_url = endpoints[idx]["url"] if idx < len(endpoints) else "unknown"
             logger.warning(
-                "aggregate_list('%s') failed for endpoint '%s' (%s): %s",
+                "aggregate_list('%s') failed for data source '%s' (%s): %s",
                 method,
-                endpoint_label,
-                endpoint_url,
+                ds_label,
+                ds_url,
                 result,
                 exc_info=result,
             )
         elif isinstance(result, list):
+            for item in result:
+                if isinstance(item, dict):
+                    item["_data_source_id"] = ds_id
+                    item["_data_source_label"] = ds_label
             merged.extend(result)
     return merged
 
 
-async def aggregate_tenant_info() -> dict[str, Any]:
-    """Return ``tenant_info`` from the first endpoint that responds successfully."""
-    endpoints = settings.all_asoc_endpoints()
-    for idx, svc in enumerate(get_endpoint_services()):
-        endpoint_label = endpoints[idx]["label"] if idx < len(endpoints) else f"endpoint[{idx}]"
-        endpoint_url = endpoints[idx]["url"] if idx < len(endpoints) else "unknown"
+async def aggregate_tenant_info(
+    *,
+    data_source_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return ``tenant_info`` from the first data source that responds successfully."""
+    sources = _load_sources(data_source_ids=data_source_ids)
+    for idx, ds in enumerate(sources):
+        ds_label = ds.get("label", f"endpoint[{idx}]")
+        ds_url = ds.get("url", "unknown")
+        svc = AsocReadService.for_endpoint(
+            ds["url"], ds["api_key"], ds["api_secret"],
+            verify=ds.get("verify_ssl", True),
+        )
         try:
             result = await svc.get_tenant_info(use_mock_on_error=True)
             if isinstance(result, dict):
                 logger.debug(
-                    "aggregate_tenant_info: using tenant info from endpoint '%s' (%s).",
-                    endpoint_label,
-                    endpoint_url,
+                    "aggregate_tenant_info: using tenant info from data source '%s' (%s).",
+                    ds_label,
+                    ds_url,
                 )
                 return result
         except Exception as exc:
             logger.warning(
-                "aggregate_tenant_info: endpoint '%s' (%s) failed: %s",
-                endpoint_label,
-                endpoint_url,
+                "aggregate_tenant_info: data source '%s' (%s) failed: %s",
+                ds_label,
+                ds_url,
                 exc,
             )
     return {}
@@ -128,10 +185,11 @@ async def aggregate_issue_counts(
     *,
     application_id: str | None = None,
     odata_filter: str | None = None,
+    data_source_ids: list[str] | None = None,
 ) -> dict[str, int]:
-    """Aggregate issue counts from ALL configured endpoints using /Count endpoints.
+    """Aggregate issue counts from ALL configured data sources using /Count endpoints.
 
-    Sums integer counts across endpoints (each endpoint is a separate
+    Sums integer counts across data sources (each source is a separate
     AppScan instance with its own issue namespace).
 
     Returns a dict with keys:
@@ -143,7 +201,7 @@ async def aggregate_issue_counts(
         "critical": 0, "high": 0, "medium": 0, "low": 0,
         "sast": 0, "dast": 0, "sca": 0, "iast": 0,
     }
-    services = get_endpoint_services()
+    services = get_endpoint_services(data_source_ids=data_source_ids)
     if not services:
         return dict(_empty)
 
@@ -158,7 +216,7 @@ async def aggregate_issue_counts(
     merged: dict[str, int] = {}
     for result in results:
         if isinstance(result, BaseException):
-            logger.warning("aggregate_issue_counts failed for one endpoint: %s", result)
+            logger.warning("aggregate_issue_counts failed for one data source: %s", result)
             continue
         if not isinstance(result, dict):
             continue
@@ -166,7 +224,7 @@ async def aggregate_issue_counts(
             if isinstance(value, int):
                 merged[key] = merged.get(key, 0) + value
 
-    # Ensure all expected keys are present even if all endpoints failed.
+    # Ensure all expected keys are present even if all data sources failed.
     for key, default in _empty.items():
         merged.setdefault(key, default)
 
@@ -177,10 +235,11 @@ async def aggregate_risk_heatmap(
     *,
     application_id: str | None = None,
     asset_group_id: str | None = None,
+    data_source_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Aggregate a severity × technology risk heatmap across ALL configured endpoints.
+    """Aggregate a severity × technology risk heatmap across ALL configured data sources.
 
-    Makes 16 parallel /Count calls (4 severities × 4 technologies) per endpoint
+    Makes 16 parallel /Count calls (4 severities × 4 technologies) per data source
     and sums the results.  Each cell that fails is silently treated as 0.
 
     Returns::
@@ -196,7 +255,7 @@ async def aggregate_risk_heatmap(
     _severities = ("Critical", "High", "Medium", "Low")
     _technologies = ("SAST", "DAST", "SCA", "IAST")
 
-    services = get_endpoint_services()
+    services = get_endpoint_services(data_source_ids=data_source_ids)
     if not services:
         return {
             "matrix": [
@@ -206,7 +265,7 @@ async def aggregate_risk_heatmap(
             "totals": {tech.lower(): 0 for tech in _technologies},
         }
 
-    # Accumulate counts across all endpoints.
+    # Accumulate counts across all data sources.
     # cells[severity][technology] = total count
     cells: dict[str, dict[str, int]] = {
         sev: {tech.lower(): 0 for tech in _technologies}
@@ -263,10 +322,11 @@ async def aggregate_status_distribution(
     *,
     application_id: str | None = None,
     asset_group_id: str | None = None,
+    data_source_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Aggregate issue counts by status across ALL configured endpoints.
+    """Aggregate issue counts by status across ALL configured data sources.
 
-    Makes 4 parallel /Count calls per endpoint (Open, Fixed, InProgress, Noise)
+    Makes 4 parallel /Count calls per data source (Open, Fixed, InProgress, Noise)
     and sums the results.
 
     Returns::
@@ -282,7 +342,7 @@ async def aggregate_status_distribution(
     """
     _statuses = ("Open", "Fixed", "InProgress", "Noise")
 
-    services = get_endpoint_services()
+    services = get_endpoint_services(data_source_ids=data_source_ids)
     if not services:
         return {"statuses": [{"status": s, "count": 0} for s in _statuses]}
 
@@ -329,10 +389,11 @@ async def aggregate_top_apps(
     *,
     limit: int = 20,
     asset_group_id: str | None = None,
+    data_source_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Aggregate top N applications by issue count across ALL configured endpoints.
+    """Aggregate top N applications by issue count across ALL configured data sources.
 
-    First fetches the application list from all endpoints, then makes per-app
+    First fetches the application list from all data sources, then makes per-app
     /Count calls (total + critical + high) in parallel under a shared semaphore.
 
     Returns::
@@ -344,11 +405,11 @@ async def aggregate_top_apps(
             ]
         }
     """
-    services = get_endpoint_services()
+    services = get_endpoint_services(data_source_ids=data_source_ids)
     if not services:
         return {"apps": []}
 
-    # Collect all applications from all endpoints.
+    # Collect all applications from all data sources.
     app_results = await asyncio.gather(
         *[svc.list_applications(use_mock_on_error=False) for svc in services],
         return_exceptions=True,
@@ -371,7 +432,7 @@ async def aggregate_top_apps(
     if not app_map:
         return {"apps": []}
 
-    # For each app, gather total + critical + high counts across all endpoints.
+    # For each app, gather total + critical + high counts across all data sources.
     semaphore = asyncio.Semaphore(max(1, settings.asoc_count_concurrency))
 
     async def _fetch_app_counts(svc: AsocReadService, app_id: str) -> dict[str, int]:
@@ -394,7 +455,7 @@ async def aggregate_top_apps(
     ]
     count_results = await asyncio.gather(*count_tasks, return_exceptions=True)
 
-    # Merge counts per app_id across endpoints.
+    # Merge counts per app_id across data sources.
     merged: dict[str, dict[str, int]] = {}
     for result in count_results:
         if isinstance(result, BaseException):
@@ -425,11 +486,14 @@ async def aggregate_top_apps(
     return {"apps": top_apps}
 
 
-async def aggregate_base_data() -> dict[str, Any]:
+async def aggregate_base_data(
+    *,
+    data_source_ids: list[str] | None = None,
+) -> dict[str, Any]:
     """Fetch scans, issues, applications, asset_groups, and tenant_info from ALL
-    configured endpoints concurrently and merge the results into a single dict.
+    configured data sources concurrently and merge the results into a single dict.
 
-    DAST page coverage is hydrated per-endpoint using each endpoint's own
+    DAST page coverage is hydrated per-data-source using each source's own
     client so that individual scan detail requests are routed correctly.
 
     Also computes ``app_based_statistics`` by summing per-app issue/scan counts
@@ -439,7 +503,8 @@ async def aggregate_base_data() -> dict[str, Any]:
     Returns a dict with keys: ``scans``, ``issues``, ``applications``,
     ``asset_groups``, ``tenant_info``, ``app_based_statistics``.
     """
-    services = get_endpoint_services()
+    services = get_endpoint_services(data_source_ids=data_source_ids)
+    sources = _load_sources(data_source_ids=data_source_ids)
     if not services:
         return {
             "scans": [],
@@ -488,15 +553,22 @@ async def aggregate_base_data() -> dict[str, Any]:
         "tenant_info": {},
         "app_based_statistics": {},
     }
-    # Accumulate app_based_statistics by summing across endpoints
+    # Accumulate app_based_statistics by summing across data sources
+    _tag_keys = ("scans", "issues", "applications", "asset_groups")
     merged_app_stats: dict[str, int] = {}
-    for result in results:
+    for idx, result in enumerate(results):
         if isinstance(result, BaseException):
             continue
-        merged["scans"].extend(result["scans"])
-        merged["issues"].extend(result["issues"])
-        merged["applications"].extend(result["applications"])
-        merged["asset_groups"].extend(result["asset_groups"])
+        ds = sources[idx] if idx < len(sources) else {}
+        ds_id = ds.get("id", f"unknown-{idx}")
+        ds_label = ds.get("label", f"endpoint[{idx}]")
+        for key in _tag_keys:
+            items = result.get(key) or []
+            for item in items:
+                if isinstance(item, dict):
+                    item["_data_source_id"] = ds_id
+                    item["_data_source_label"] = ds_label
+            merged[key].extend(items)
         if not merged["tenant_info"]:
             merged["tenant_info"] = result["tenant_info"]
         # Sum numeric fields from app_based_statistics across endpoints

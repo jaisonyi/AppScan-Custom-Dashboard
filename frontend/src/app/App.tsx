@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Area,
@@ -28,9 +28,13 @@ import {
   createEndpoint,
   updateEndpoint,
   deleteEndpoint,
+  getDataSourceIdentities,
   type EndpointInfo,
   type ManagedEndpointInfo,
   type EndpointStatusResult,
+  type DataSourceIdentity,
+  getWorkerStatus,
+  type WorkerStatus,
 } from '../shared/services/api';
 import {
   SeverityDonutChart,
@@ -40,7 +44,7 @@ import {
   TopAppsBarChart,
   DataCompletenessIndicator,
 } from '../shared/charts';
-import { getChartData, getIssueCounts } from '../shared/services/api';
+import { getChartData } from '../shared/services/api';
 
 const STATUS_COLORS: Record<string, string> = {
   completed: '#0b8f6a',
@@ -158,6 +162,7 @@ export function App() {
   const [scans, setScans] = useState<any[]>([]);
   const [applications, setApplications] = useState<any[]>([]);
   const [assetGroups, setAssetGroups] = useState<any[]>([]);
+  const assetGroupsRef = useRef<any[]>([]);
   const [issues, setIssues] = useState<any[]>([]);
   const [stats, setStats] = useState<any>({});
   const [portfolioSummary, setPortfolioSummary] = useState<any>({});
@@ -217,21 +222,25 @@ export function App() {
   const [endpoints, setEndpoints] = useState<EndpointInfo[]>([]);
   const [endpointStatus, setEndpointStatus] = useState<EndpointStatusResult[] | null>(null);
   const [endpointStatusLoading, setEndpointStatusLoading] = useState(false);
+  const [dataSourceIdentities, setDataSourceIdentities] = useState<DataSourceIdentity[]>([]);
+  const [selectedDataSourceIds, setSelectedDataSourceIds] = useState<string[]>([]);
+  const dsFilterInitRef = useRef(false);
   // Endpoint management modal state
   const [managedEndpoints, setManagedEndpoints] = useState<ManagedEndpointInfo[]>([]);
   const [epModalOpen, setEpModalOpen] = useState(false);
   const [epModalLoading, setEpModalLoading] = useState(false);
   const [epModalError, setEpModalError] = useState('');
-  const [epEditIdx, setEpEditIdx] = useState<number | null>(null);  // null = adding new
-  const [epForm, setEpForm] = useState({ url: '', label: '', api_key: '', api_secret: '' });
+  const [epEditIdx, setEpEditIdx] = useState<string | null>(null);  // null = adding new
+  const [epForm, setEpForm] = useState({ url: '', label: '', api_key: '', api_secret: '', verify_ssl: true });
   const [freshness, setFreshness] = useState<Record<FreshnessDomain, FreshnessInfo>>({
     statistics: {},
     portfolio: {},
   });
   const [error, setError] = useState('');
   const [chartData, setChartData] = useState<any>(null);
-  const [issueCounts, setIssueCounts] = useState<any>(null);
   const [chartDataLoading, setChartDataLoading] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [workerStatus, setWorkerStatus] = useState<WorkerStatus | null>(null);
 
   function normalizeIdList(values: string[]): string[] {
     const seen = new Set<string>();
@@ -275,11 +284,18 @@ export function App() {
     };
   }
 
+  function buildListPath(basePath: string): string {
+    if (selectedDataSourceIds.length === 0) return basePath;
+    const params = new URLSearchParams();
+    selectedDataSourceIds.forEach((id) => params.append('data_source_ids', id));
+    return `${basePath}?${params.toString()}`;
+  }
+
   function buildAnalyticsPath(path: string, options?: { refresh?: boolean; filters?: ScopeFilters; extra?: Record<string, string> }): string {
     const params = new URLSearchParams();
     const selectedFilters = options?.filters || appliedScopeFilters;
     if (scopeFiltersEnabled) {
-      const allAssetIds = normalizeIdList(assetGroups.map((item) => String(item?.id || '')));
+      const allAssetIds = normalizeIdList(assetGroupsRef.current.map((item) => String(item?.id || '')));
       const selectedAssetIds = normalizeIdList(selectedFilters.assetGroupIds);
       const hasScopedAssetGroupFilter =
         selectedAssetIds.length > 0 &&
@@ -312,6 +328,7 @@ export function App() {
         params.set('to_date', reportRange.toDate);
       }
     }
+    selectedDataSourceIds.forEach((id) => params.append('data_source_ids', id));
     if (options?.refresh) {
       params.set('refresh', 'true');
     }
@@ -333,6 +350,26 @@ export function App() {
       || toNumber(payload?.application_count) > 0
       || toNumber(payload?.asset_group_count) > 0
     );
+  }
+
+  function deriveIssueCountsFromStats(payload: any): any | null {
+    if (!hasMeaningfulStats(payload)) {
+      return null;
+    }
+    return {
+      total: toNumber(payload?.total_issues),
+      active: toNumber(payload?.active_issues),
+      resolved: toNumber(payload?.resolved_issues),
+      critical: toNumber(payload?.critical_issues),
+      high: toNumber(payload?.high_issues),
+      medium: toNumber(payload?.medium_issues),
+      low: toNumber(payload?.low_issues),
+      sast: toNumber(payload?.sast_issues),
+      dast: toNumber(payload?.dast_issues),
+      sca: toNumber(payload?.sca_issues),
+      iast: toNumber(payload?.iast_issues),
+      count_source: String(payload?.count_source || 'bundle_statistics'),
+    };
   }
 
   function deriveStatsFromPortfolio(summary: any): any {
@@ -450,13 +487,8 @@ export function App() {
     setChartDataLoading(true);
     try {
       const chartPath = buildAnalyticsPath('/analytics/chart-data', { filters });
-      const countPath = buildAnalyticsPath('/analytics/issue-counts', { filters });
-      const [cd, ic] = await Promise.all([
-        getObject(chartPath).catch(() => null),
-        getObject(countPath).catch(() => null),
-      ]);
+      const cd = await getObject(chartPath).catch(() => null);
       if (cd) setChartData(cd);
-      if (ic) setIssueCounts(ic);
     } catch (err) {
       console.warn('Failed to load chart data:', err);
     } finally {
@@ -484,11 +516,11 @@ export function App() {
         console.error(err);
         return [];
       }),
-      getList('/applications').catch((err) => {
+      getList(buildListPath('/applications')).catch((err) => {
         console.error(err);
         return [];
       }),
-      getList('/asset-groups').catch((err) => {
+      getList(buildListPath('/asset-groups')).catch((err) => {
         console.error(err);
         return [];
       }),
@@ -496,15 +528,22 @@ export function App() {
 
     setPipelineBom(Array.isArray(pb) ? pb : []);
     setApplications(Array.isArray(applicationRows) ? applicationRows : []);
-    setAssetGroups(Array.isArray(assetGroupRows) ? assetGroupRows : []);
+    const safeAssetGroupRows = Array.isArray(assetGroupRows) ? assetGroupRows : [];
+    setAssetGroups(safeAssetGroupRows);
+    assetGroupsRef.current = safeAssetGroupRows;
 
     let nextScopeFilters = appliedScopeFilters;
     if (scopeFiltersEnabled) {
       const allAssetGroupIds = normalizeIdList(assetGroupRows.map((row: any) => String(row?.id || '')));
-      const safeAssetGroupIds =
+      let safeAssetGroupIds =
         appliedScopeFilters.assetGroupIds.length > 0
           ? normalizeIdList(appliedScopeFilters.assetGroupIds.filter((id) => allAssetGroupIds.includes(id)))
           : allAssetGroupIds;
+      // When the intersected IDs cover the full catalog, clear to "no filter"
+      // to avoid a phantom scope filter that silently excludes unassigned apps.
+      if (safeAssetGroupIds.length >= allAssetGroupIds.length) {
+        safeAssetGroupIds = [];
+      }
 
       const allowedApplications = applicationRows.filter((row: any) => {
         if (safeAssetGroupIds.length === 0) {
@@ -531,7 +570,11 @@ export function App() {
         reportWindow: appliedScopeFilters.reportWindow || 'all',
       };
       setAppliedScopeFilters(nextScopeFilters);
-      setPendingScopeFilters(nextScopeFilters);
+      // Only overwrite pending filters when the scope panel is closed.
+      // If the user is mid-edit in the panel, preserve their in-progress selection.
+      if (!scopePanel) {
+        setPendingScopeFilters(nextScopeFilters);
+      }
     }
 
     await Promise.all([
@@ -554,28 +597,59 @@ export function App() {
           });
         }
 
-        await refreshData();
-        // refreshData() now calls loadChartData(nextScopeFilters) internally
+        // Fetch current user immediately after login, before data load,
+        // so role-gated UI (e.g. Manage button) is always visible even
+        // when refreshData() fails on a fresh install with no endpoints.
         try {
           const profile = await getCurrentUser();
           setCurrentUser(profile || null);
         } catch (profileError) {
           console.warn('Unable to load current user profile', profileError);
         }
+
+        await refreshData();
+        // refreshData() now calls loadChartData(nextScopeFilters) internally
         try {
           const epData = await getEndpoints();
           setEndpoints(epData.endpoints || []);
         } catch (epError) {
           console.warn('Unable to load endpoint list', epError);
         }
+        try {
+          const idData = await getDataSourceIdentities({ autoRefreshStale: true });
+          setDataSourceIdentities(idData.identities || []);
+        } catch (idError) {
+          console.warn('Unable to load data source identities', idError);
+        }
       } catch (err) {
         setError('Failed to authenticate or load dashboard data.');
         console.error(err);
+      } finally {
+        setIsInitialLoading(false);
       }
     }
 
     load();
   }, []);
+
+  // Poll worker status every 20 s after the initial load completes.
+  useEffect(() => {
+    if (isInitialLoading) return;
+    const fetchStatus = () => {
+      getWorkerStatus().then(setWorkerStatus).catch(() => {});
+    };
+    fetchStatus();
+    const id = setInterval(fetchStatus, 20_000);
+    return () => clearInterval(id);
+  }, [isInitialLoading]);
+
+  useEffect(() => {
+    if (!dsFilterInitRef.current) {
+      dsFilterInitRef.current = true;
+      return;
+    }
+    refreshData();
+  }, [selectedDataSourceIds]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -686,6 +760,7 @@ export function App() {
 
   const totalIssues = toNumber(stats.total_issues ?? issues.length);
   const activeIssues = toNumber(stats.active_issues);
+  const effectiveIssueCounts = deriveIssueCountsFromStats(stats);
   const statusCounts = portfolioSummary.scan_count_by_status || {};
 
   const failedScans = toNumber(
@@ -1456,17 +1531,6 @@ export function App() {
     .filter((value) => Number.isFinite(value));
   const lastSync = lastSyncEpochs.length > 0 ? new Date(Math.max(...lastSyncEpochs)) : null;
 
-  const currentUserDisplayName =
-    String(currentUser?.display_name || currentUser?.username || currentUser?.subject || '').trim() ||
-    'Current User';
-  const currentUserFirstName = String(currentUser?.first_name || '').trim();
-  const currentUserLastName = String(currentUser?.last_name || '').trim();
-  const currentUserEmail = String(currentUser?.email || '').trim() || 'Email unavailable';
-  const currentUserRole = String(currentUser?.role || '').trim() || `Role ${authMode.toUpperCase()}`;
-  const currentUserOrg =
-    String(currentUser?.organization_name || currentUser?.tenant_name || '').trim() || 'Organization unavailable';
-  const currentUserSource = String(currentUser?.source || 'local').toUpperCase();
-
   const allAccessibleAssetGroupIds = normalizeIdList(assetGroups.map((item) => String(item?.id || '')));
   const effectivePendingAssetGroupIds =
     pendingScopeFilters.assetGroupIds.length > 0 ? pendingScopeFilters.assetGroupIds : allAccessibleAssetGroupIds;
@@ -1550,6 +1614,14 @@ export function App() {
     if ((appliedScopeFilters.reportWindow || 'all') !== 'all') {
       scopeChips.push(`Report Window: ${appliedScopeFilters.reportWindow}`);
     }
+  }
+
+  if (selectedDataSourceIds.length > 0 && selectedDataSourceIds.length < endpoints.length) {
+    const dsLabels = selectedDataSourceIds
+      .slice(0, 3)
+      .map((id) => endpoints.find((e: any) => e.id === id)?.label || id);
+    const dsExtra = selectedDataSourceIds.length > 3 ? ` +${selectedDataSourceIds.length - 3}` : '';
+    scopeChips.push(`Sources: ${dsLabels.join(', ')}${dsExtra}`);
   }
 
   async function applyScopeSelection(): Promise<void> {
@@ -1657,7 +1729,7 @@ export function App() {
             return;
           }
           try {
-            const applicationRows = await getList('/applications');
+            const applicationRows = await getList(buildListPath('/applications'));
             setApplications(Array.isArray(applicationRows) ? applicationRows : []);
           } catch (err) {
             console.error(err);
@@ -1847,6 +1919,11 @@ export function App() {
                         }}
                       />
                       <span>{item?.name || id}</span>
+                      {endpoints.length > 1 && item?._data_source_label ? (
+                        <span style={{ fontSize: '0.62rem', padding: '0.05rem 0.35rem', borderRadius: '3px', background: 'rgba(59,130,246,0.15)', color: 'var(--accent, #60a5fa)', marginLeft: '0.3rem', whiteSpace: 'nowrap' }}>
+                          {item._data_source_label}
+                        </span>
+                      ) : null}
                     </label>
                   );
                 })}
@@ -1937,6 +2014,11 @@ export function App() {
                         }}
                       />
                       <span>{item?.name || id}</span>
+                      {endpoints.length > 1 && item?._data_source_label ? (
+                        <span style={{ fontSize: '0.62rem', padding: '0.05rem 0.35rem', borderRadius: '3px', background: 'rgba(59,130,246,0.15)', color: 'var(--accent, #60a5fa)', marginLeft: '0.3rem', whiteSpace: 'nowrap' }}>
+                          {item._data_source_label}
+                        </span>
+                      ) : null}
                     </label>
                   );
                 })}
@@ -2199,22 +2281,48 @@ export function App() {
               </header>
               {endpoints.length === 0 ? (
                 <div className="sidebar-filter-empty" role="status">
-                  No ASoC endpoints configured.
+                  No ASoC endpoints configured. Click <strong>Manage</strong> below to add one.
                 </div>
               ) : (
                 <div className="sidebar-filter-list">
                   {endpoints.map((ep) => {
                     const statusEntry = endpointStatus?.find((r) => r.url === ep.url);
+                    const isSelected = selectedDataSourceIds.length === 0 || selectedDataSourceIds.includes(ep.id);
                     return (
-                      <div key={ep.index} className="sidebar-filter-option" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '2px' }}>
-                        <strong style={{ fontSize: '0.82rem' }}>{ep.label}</strong>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted, #94a3b8)', wordBreak: 'break-all' }}>{ep.url}</span>
+                      <label
+                        key={ep.id}
+                        className={`sidebar-filter-option${isSelected ? ' selected' : ''}`}
+                        style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '2px', cursor: 'pointer' }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', width: '100%' }}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => {
+                              if (selectedDataSourceIds.length === 0) {
+                                // Currently showing all — select only the others (deselect this one)
+                                setSelectedDataSourceIds(endpoints.filter((e: any) => e.id !== ep.id).map((e: any) => e.id));
+                              } else if (selectedDataSourceIds.includes(ep.id)) {
+                                const next = selectedDataSourceIds.filter((id) => id !== ep.id);
+                                // If removing last one, reset to all
+                                setSelectedDataSourceIds(next.length === 0 ? [] : next);
+                              } else {
+                                const next = [...selectedDataSourceIds, ep.id];
+                                // If all selected, reset to empty (= all)
+                                setSelectedDataSourceIds(next.length >= endpoints.length ? [] : next);
+                              }
+                            }}
+                            style={{ accentColor: 'var(--accent, #3b82f6)' }}
+                          />
+                          <strong style={{ fontSize: '0.82rem' }}>{ep.label}</strong>
+                        </div>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted, #94a3b8)', wordBreak: 'break-all', paddingLeft: '1.4rem' }}>{ep.url}</span>
                         {statusEntry ? (
-                          <span style={{ fontSize: '0.72rem', color: statusEntry.ok ? '#22c55e' : '#ef4444' }}>
+                          <span style={{ fontSize: '0.72rem', color: statusEntry.ok ? '#22c55e' : '#ef4444', paddingLeft: '1.4rem' }}>
                             {statusEntry.ok ? `✓ OK (${statusEntry.latency_ms}ms)` : `✗ ${statusEntry.error}`}
                           </span>
                         ) : null}
-                      </div>
+                      </label>
                     );
                   })}
                 </div>
@@ -2234,7 +2342,7 @@ export function App() {
                         setEpModalLoading(false);
                       }
                       setEpEditIdx(null);
-                      setEpForm({ url: '', label: '', api_key: '', api_secret: '' });
+                      setEpForm({ url: '', label: '', api_key: '', api_secret: '', verify_ssl: true });
                       setEpModalOpen(true);
                     }}
                   >
@@ -2261,30 +2369,62 @@ export function App() {
                     {endpointStatusLoading ? 'Checking...' : 'Check Status'}
                   </button>
                 ) : null}
+                {selectedDataSourceIds.length > 0 ? (
+                  <button className="secondary" onClick={() => setSelectedDataSourceIds([])}>
+                    Clear Filter
+                  </button>
+                ) : null}
               </div>
             </section>
           ) : null}
 
-          <div className="sidebar-current-user current-user-panel" aria-label="Current user profile">
-            <span className="current-user-label">Signed In As</span>
-            <strong className="current-user-name">{currentUserDisplayName}</strong>
-            {(currentUserFirstName || currentUserLastName) && (
-              <span className="current-user-meta" style={{ fontSize: '0.72rem', opacity: 0.8 }}>
-                {[currentUserFirstName, currentUserLastName].filter(Boolean).join(' ')}
+          {dataSourceIdentities.length > 0 && (
+            <div className="sidebar-api-access" aria-label="ASoC API access identities">
+              <span className="sidebar-api-access-header">
+                ASoC API Access ({dataSourceIdentities.length} source{dataSourceIdentities.length !== 1 ? 's' : ''})
               </span>
-            )}
-            <span className="current-user-meta">{currentUserEmail}</span>
-            <span className="current-user-meta" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-              <span style={{ opacity: 0.6, fontSize: '0.68rem' }}>Role</span>
-              {currentUserRole}
-            </span>
-            <span className="current-user-tenant" style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-              <span style={{ opacity: 0.6, fontSize: '0.68rem' }}>Org</span>
-              {currentUserOrg}
-            </span>
-            <span className="current-user-source">{currentUserSource}</span>
-          </div>
-          <div className="sidebar-footnote">Scope-aware by role and accessible asset group.</div>
+              {dataSourceIdentities.map((ds) => {
+                const dotColor = ds.last_probe_ok === true ? '#22c55e' : ds.last_probe_ok === false ? '#ef4444' : '#64748b';
+                return (
+                  <div key={ds.id} className="sidebar-api-access-source">
+                    <div style={{ fontSize: '0.74rem', fontWeight: 600, color: '#e2e8f0', display: 'flex', alignItems: 'center' }}>
+                      <span className="sidebar-api-access-dot" style={{ background: dotColor }} />
+                      {ds.label}
+                    </div>
+                    {ds.tenant_name ? (
+                      <div style={{ fontSize: '0.66rem', color: 'rgba(226,232,240,0.7)', paddingLeft: '10px', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <span style={{ opacity: 0.6 }}>Org</span> {ds.tenant_name}
+                      </div>
+                    ) : null}
+                    {ds.api_user_name ? (
+                      <div style={{ fontSize: '0.7rem', color: 'rgba(241,245,249,0.9)', paddingLeft: '10px' }}>{ds.api_user_name}</div>
+                    ) : null}
+                    {ds.api_user_role ? (
+                      <div style={{ fontSize: '0.66rem', color: 'rgba(226,232,240,0.7)', paddingLeft: '10px', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                        <span style={{ opacity: 0.6 }}>Role</span> {ds.api_user_role}
+                      </div>
+                    ) : null}
+                    {!ds.api_user_name && !ds.api_user_role && ds.last_probe_ok === false && (
+                      <div style={{ fontSize: '0.66rem', color: '#ef4444', paddingLeft: '10px', fontStyle: 'italic' }}>Unable to verify identity</div>
+                    )}
+                    {!ds.api_user_name && !ds.api_user_role && ds.last_probe_ok === true && (
+                      <div style={{ fontSize: '0.66rem', opacity: 0.5, paddingLeft: '10px', fontStyle: 'italic' }}>User details unavailable</div>
+                    )}
+                    {!ds.api_user_name && !ds.api_user_role && ds.last_probe_ok === null && (
+                      <div style={{ fontSize: '0.66rem', opacity: 0.4, paddingLeft: '10px', fontStyle: 'italic' }}>Probing...</div>
+                    )}
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: '0.64rem', color: 'rgba(248,250,252,0.45)', lineHeight: 1.35 }}>
+                Scope-aware by role and accessible asset group.
+              </div>
+            </div>
+          )}
+
+          {dataSourceIdentities.length === 0 && (
+            <div className="sidebar-footnote" style={{ marginTop: 'auto' }}>Scope-aware by role and accessible asset group.</div>
+          )}
         </aside>
 
         <main className="overview-main">
@@ -2724,18 +2864,18 @@ export function App() {
             <div className="chart-card-new">
               <h4>
                 Issue Severity Distribution
-                {issueCounts && (
+                {effectiveIssueCounts && (
                   <DataCompletenessIndicator
-                    countSource={issueCounts.count_source || stats?.count_source}
+                    countSource={effectiveIssueCounts.count_source || stats?.count_source}
                   />
                 )}
               </h4>
-              {issueCounts ? (
+              {effectiveIssueCounts ? (
                 <SeverityDonutChart
-                  critical={issueCounts.critical || stats?.critical_issues || 0}
-                  high={issueCounts.high || stats?.high_issues || 0}
-                  medium={issueCounts.medium || stats?.medium_issues || 0}
-                  low={issueCounts.low || stats?.low_issues || 0}
+                  critical={effectiveIssueCounts.critical || 0}
+                  high={effectiveIssueCounts.high || 0}
+                  medium={effectiveIssueCounts.medium || 0}
+                  low={effectiveIssueCounts.low || 0}
                 />
               ) : (
                 <div style={{ height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>
@@ -2747,12 +2887,12 @@ export function App() {
             {/* Technology Breakdown */}
             <div className="chart-card-new">
               <h4>Issues by Technology</h4>
-              {issueCounts ? (
+              {effectiveIssueCounts ? (
                 <TechnologyBarChart
-                  sast={issueCounts.sast || 0}
-                  dast={issueCounts.dast || 0}
-                  sca={issueCounts.sca || 0}
-                  iast={issueCounts.iast || 0}
+                  sast={effectiveIssueCounts.sast || 0}
+                  dast={effectiveIssueCounts.dast || 0}
+                  sca={effectiveIssueCounts.sca || 0}
+                  iast={effectiveIssueCounts.iast || 0}
                 />
               ) : (
                 <div style={{ height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>
@@ -3247,11 +3387,11 @@ export function App() {
               <div style={{ marginBottom: '1.2rem' }}>
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-muted, #94a3b8)', marginBottom: '0.5rem' }}>Configured endpoints</p>
                 {managedEndpoints.map((ep) => (
-                  <div key={ep.index} style={{
+                  <div key={ep.id} style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     padding: '0.5rem 0.75rem', marginBottom: '0.4rem',
                     background: 'var(--bg-card, #0f172a)', borderRadius: '6px',
-                    border: epEditIdx === ep.index ? '1px solid #3b82f6' : '1px solid var(--border, #334155)',
+                    border: epEditIdx === ep.id ? '1px solid #3b82f6' : '1px solid var(--border, #334155)',
                   }}>
                     <div>
                       <strong style={{ fontSize: '0.82rem' }}>{ep.label}</strong>
@@ -3263,8 +3403,8 @@ export function App() {
                         className="secondary"
                         style={{ fontSize: '0.75rem', padding: '0.2rem 0.55rem' }}
                         onClick={() => {
-                          setEpEditIdx(ep.index);
-                          setEpForm({ url: ep.url, label: ep.label, api_key: ep.api_key, api_secret: '' });
+                          setEpEditIdx(ep.id);
+                          setEpForm({ url: ep.url, label: ep.label, api_key: ep.api_key, api_secret: '', verify_ssl: ep.verify_ssl ?? true });
                           setEpModalError('');
                         }}
                       >Edit</button>
@@ -3275,7 +3415,7 @@ export function App() {
                           setEpModalLoading(true);
                           setEpModalError('');
                           try {
-                            const result = await deleteEndpoint(ep.index);
+                            const result = await deleteEndpoint(ep.id);
                             setManagedEndpoints(result.endpoints || []);
                             const epList = await getEndpoints();
                             setEndpoints(epList.endpoints || []);
@@ -3297,7 +3437,7 @@ export function App() {
             {/* Add / Edit form */}
             <div style={{ borderTop: '1px solid var(--border, #334155)', paddingTop: '1rem' }}>
               <p style={{ fontSize: '0.78rem', color: 'var(--text-muted, #94a3b8)', marginBottom: '0.75rem' }}>
-                {epEditIdx !== null ? `Editing endpoint #${epEditIdx}` : 'Add new endpoint'}
+                {epEditIdx !== null ? `Editing data source` : 'Add new endpoint'}
               </p>
               {epModalError ? (
                 <div style={{ color: '#f87171', fontSize: '0.78rem', marginBottom: '0.6rem' }}>{epModalError}</div>
@@ -3325,6 +3465,18 @@ export function App() {
                   />
                 </div>
               ))}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.6rem' }}>
+                <input
+                  type="checkbox"
+                  id="ep-verify-ssl"
+                  checked={!epForm.verify_ssl}
+                  onChange={(e) => setEpForm((f) => ({ ...f, verify_ssl: !e.target.checked }))}
+                  style={{ cursor: 'pointer' }}
+                />
+                <label htmlFor="ep-verify-ssl" style={{ fontSize: '0.75rem', color: 'var(--text-muted, #94a3b8)', cursor: 'pointer' }}>
+                  Skip SSL verification (for self-signed / local TLS certs)
+                </label>
+              </div>
               <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.8rem' }}>
                 <button
                   disabled={epModalLoading}
@@ -3334,11 +3486,12 @@ export function App() {
                     try {
                       let result;
                       if (epEditIdx !== null) {
-                        const payload: Record<string, string> = {};
+                        const payload: Record<string, string | boolean> = {};
                         if (epForm.url) payload.url = epForm.url;
                         if (epForm.label) payload.label = epForm.label;
                         if (epForm.api_key) payload.api_key = epForm.api_key;
                         if (epForm.api_secret) payload.api_secret = epForm.api_secret;
+                        payload.verify_ssl = epForm.verify_ssl;
                         result = await updateEndpoint(epEditIdx, payload);
                       } else {
                         result = await createEndpoint({
@@ -3346,13 +3499,14 @@ export function App() {
                           label: epForm.label,
                           api_key: epForm.api_key,
                           api_secret: epForm.api_secret,
+                          verify_ssl: epForm.verify_ssl,
                         });
                       }
                       setManagedEndpoints(result.endpoints || []);
                       const epList = await getEndpoints();
                       setEndpoints(epList.endpoints || []);
                       setEpEditIdx(null);
-                      setEpForm({ url: '', label: '', api_key: '', api_secret: '' });
+                      setEpForm({ url: '', label: '', api_key: '', api_secret: '', verify_ssl: true });
                     } catch (err: any) {
                       const detail = err?.response?.data?.detail;
                       setEpModalError(Array.isArray(detail)
@@ -3368,7 +3522,7 @@ export function App() {
                 {epEditIdx !== null ? (
                   <button className="secondary" onClick={() => {
                     setEpEditIdx(null);
-                    setEpForm({ url: '', label: '', api_key: '', api_secret: '' });
+                    setEpForm({ url: '', label: '', api_key: '', api_secret: '', verify_ssl: true });
                     setEpModalError('');
                   }}>Cancel Edit</button>
                 ) : null}
@@ -3382,6 +3536,42 @@ export function App() {
       ) : null,
       document.body
     )}
+    {/* ── Sync status bar ─────────────────────────────────────────── */}
+    <div className="sync-status-bar" aria-live="polite">
+      {isInitialLoading ? (
+        <span className="sync-status-pill sync-loading">
+          <span className="sync-spinner" aria-hidden="true" /> Connecting to AppScan&#8230;
+        </span>
+      ) : workerStatus ? (
+        <span
+          className={
+            workerStatus.running
+              ? 'sync-status-pill sync-loading'
+              : workerStatus.error_count > 0 && !workerStatus.cache_populated
+              ? 'sync-status-pill sync-error'
+              : 'sync-status-pill sync-ok'
+          }
+        >
+          {workerStatus.running ? (
+            <><span className="sync-spinner" aria-hidden="true" /> Syncing with AppScan&#8230;</>
+          ) : workerStatus.last_success_at ? (
+            <>
+              &#10003;&nbsp;Data ready &mdash; last sync&nbsp;
+              {new Date(workerStatus.last_success_at).toLocaleTimeString()}
+              {workerStatus.error_count > 0 && (
+                <span className="sync-error-badge" title={workerStatus.last_error ?? ''}>
+                  &nbsp;&bull;&nbsp;{workerStatus.error_count} error{workerStatus.error_count !== 1 ? 's' : ''}
+                </span>
+              )}
+            </>
+          ) : workerStatus.error_count > 0 ? (
+            <>&#9888;&nbsp;Sync issues — check ASoC connectivity</>
+          ) : (
+            <>&#9679;&nbsp;Awaiting first sync&#8230;</>
+          )}
+        </span>
+      ) : null}
+    </div>
     </div>
   );
 }

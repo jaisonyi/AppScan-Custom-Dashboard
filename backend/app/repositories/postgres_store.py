@@ -6,7 +6,6 @@ import logging
 import threading
 from contextlib import closing
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import psycopg

@@ -20,13 +20,40 @@ Deliver an extensible ASPM dashboard for HCL AppScan on Cloud with role-aware an
 - OpenAPI spec: https://cloud.appscan.com/swagger/v4/swagger.json
 - Supported read entities in this dashboard: `Scans`, `Apps`, `AssetGroups`, `Issues`, `Reports`
 - Authentication follows Swagger v4 contract:
-	- `POST /api/v4/Account/ApiKeyLogin` for bearer token retrieval
-	- `X-API-KEY: <KeyId>:<KeySecret>` fallback header when bearer retrieval fails
+	- `POST /api/v4/Account/ApiKeyLogin` for bearer token retrieval (returns `{Token, Expire}` — does not include `UserId`)
+	- `X-API-KEY: <KeyId>:<KeySecret>` fallback header when bearer retrieval fails (any exception triggers fallback)
+
+## Multi-Data-Source Architecture
+- The dashboard supports connecting to **multiple ASoC/AppScan 360 instances** simultaneously.
+- Connection configurations are stored in the `data_sources` PostgreSQL table, managed via `/api/v1/endpoints` CRUD routes.
+- Each data source has: URL, API key, API secret, display label, enabled flag, and `verify_ssl` option.
+- The `multi_endpoint.py` service layer aggregates data from all enabled sources:
+  - `_load_sources()` reads enabled sources with optional `data_source_ids` filtering (validated, capped at 20).
+  - `aggregate_list()` fetches from each source in parallel, tags items with `_data_source_id` and `_data_source_label`.
+  - Per-source failures are logged at WARNING but do not block other sources (graceful degradation).
+- List endpoints (`/applications`, `/scans`, `/issues`, `/asset-groups`) and all 14 analytics endpoints accept `data_source_ids` query parameter for scoped views.
+- Analytics cache keys incorporate `data_source_ids` for separate snapshots per selection.
+- SSL verification (`verify_ssl`) is threaded through: `data_source_store` → `multi_endpoint` → `AsocReadService.for_endpoint()` → `AsocApiClient` → `httpx`.
+- See ADR-0002 for the full decision record.
+
+## Data Source Identity Probing
+- Each data source has a per-source identity probe that determines the API key owner's name, email, and role.
+- Identity is extracted primarily from `GET /api/v4/Account/TenantInfo` → `UserInfo` object:
+  - `UserInfo.FirstName` + `UserInfo.LastName` → `api_user_name` (fallback: `UserInfo.Username`)
+  - `UserInfo.Email` → `api_user_email`
+  - `UserInfo.IsAdmin` → `api_user_role` (`true` = "Administrator", `false` = "User")
+- Fallback: if `TenantInfo.UserInfo` is absent, attempts `GET /api/v4/User/{id}` using the `owner_user_id` from `ApiKeyLogin` (note: `ApiKeyLogin` often returns only `{Token, Expire}` without a `UserId`).
+- Identity refresh has two modes:
+  - **Stale refresh** (`refresh_stale_identities`): re-probes only sources whose `last_probed_at` exceeds the TTL (`identity_probe_ttl_seconds`, default 86400s / 24 hours). Called automatically by `GET /endpoints/identities?auto_refresh_stale=true`.
+  - **Force refresh** (`refresh_all_api_user_info`): re-probes all enabled sources regardless of TTL.
+- Results are cached in the `data_sources` table: `api_user_name`, `api_user_role`, `api_user_email`, `tenant_name`, `last_probed_at`, `last_probe_ok`.
+- The frontend sidebar displays identity info per data source, showing "Unable to verify identity" when `last_probe_ok` is false and name/role fields are empty.
 
 ## Read-Only Enforcement
 - Mutating methods are blocked in connector read-only mode.
 - The only permitted `POST` is `POST /api/v4/Account/ApiKeyLogin` for session token acquisition.
 - All dashboard data APIs are implemented as read routes only.
+- The read-only policy applies uniformly to **all configured data sources**.
 
 ## Authentication Modes
 - Local mode (default): internal bootstrap login for development and testing.
@@ -70,3 +97,25 @@ Deliver an extensible ASPM dashboard for HCL AppScan on Cloud with role-aware an
 ## UX Persistence
 - Dashboard first-page view mode (`General`, `Larger Chart`, `SOC Style`) is persisted in browser local storage.
 - Users return to their preferred default view automatically on reload.
+
+## CSV Export for External BI Tools (v1.4.3+)
+- Four streaming CSV endpoints under `/api/v1/export` provide PowerBI / Excel / Tableau-friendly data extraction.
+- Endpoints: `scans.csv`, `applications.csv`, `issues.csv`, `summary.csv`.
+- Each endpoint reuses the same read-only aggregation (`aggregate_list()`, `aggregate_issue_counts()`, `aggregate_top_apps()`) and asset-group scoping (`filter_by_asset_group()`) as the dashboard UI.
+- Auth enforced on every endpoint: `get_current_user` + `assert_action_allowed`.
+- `data_source_ids` query parameter supported for source-scoped exports.
+- Responses use `StreamingResponse` with `text/csv` content type and timestamped `Content-Disposition` filenames.
+- `summary.csv` is a KPI pivot table (Metric/Value rows) followed by a Top 20 Applications breakdown.
+- No new ASoC API calls introduced — export endpoints consume the same cached / aggregated data as the UI.
+
+## Containerization and Cloud Deployment (v1.4.3+)
+- **Docker**: Multi-stage `Dockerfile` at `infra/docker/Dockerfile`.
+  - Stage 1: Node 20-alpine builds the React frontend (`npm ci && npm run build`).
+  - Stage 2: Python 3.12-slim production image with gunicorn + uvicorn workers, non-root `dashboard` user, healthcheck on `/health`.
+- **Docker Compose**: `infra/compose/docker-compose.yml` provides a full-stack local deployment (PostgreSQL 16-alpine + dashboard app) for testing and demos.
+- **Azure Bicep**: `infra/azure/main.bicep` deploys the production stack:
+  - App Service (Linux/Docker) with system-assigned managed identity.
+  - PostgreSQL Flexible Server (B1ms, v16) with firewall rules.
+  - Key Vault (RBAC mode) for secrets management.
+  - Application Insights + Log Analytics for observability.
+- All infrastructure files are parameterized for environment-specific configuration.

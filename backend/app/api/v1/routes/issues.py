@@ -1,6 +1,6 @@
-from typing import Annotated
+from typing import Annotated, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.core.security.authorization import filter_by_asset_group
 from app.core.security.dependencies import UserContext, get_current_user
@@ -11,7 +11,10 @@ router = APIRouter()
 
 
 @router.get("")
-async def list_issues(user: Annotated[UserContext, Depends(get_current_user)]) -> list[dict]:
+async def list_issues(
+    user: Annotated[UserContext, Depends(get_current_user)],
+    data_source_ids: Optional[List[str]] = Query(default=None),
+) -> list[dict]:
     assert_action_allowed("view_issues", user.role)
-    items = await aggregate_list("list_issues")
+    items = await aggregate_list("list_issues", data_source_ids=data_source_ids)
     return filter_by_asset_group(items, user.asset_group_ids, user.role, ["asset_group_id"])

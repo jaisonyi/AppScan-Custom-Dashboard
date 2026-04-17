@@ -1,26 +1,25 @@
-"""Endpoint management routes — list and health-check configured ASoC endpoints.
+"""Data-source management routes — list, CRUD, and health-check configured ASoC data sources.
 
-GET /api/v1/endpoints        — list all configured endpoints (label + URL only, no credentials)
-GET /api/v1/endpoints/status — live connectivity probe for each endpoint (admin-only)
-GET /api/v1/endpoints/manage — admin-only full list with api_key (secret masked)
-POST /api/v1/endpoints       — add a new endpoint (admin-only)
-PUT /api/v1/endpoints/{idx}  — update an endpoint by index (admin-only)
-DELETE /api/v1/endpoints/{idx} — remove an endpoint by index (admin-only)
+GET    /api/v1/endpoints              — list all data sources (label + URL only, no credentials)
+GET    /api/v1/endpoints/status       — live connectivity probe for each data source (admin-only)
+GET    /api/v1/endpoints/manage       — admin-only full list with api_key (secret masked)
+GET    /api/v1/endpoints/identities   — per-source API user info for the sidebar
+POST   /api/v1/endpoints/refresh-identities — refresh cached API user info from ASoC
+POST   /api/v1/endpoints              — add a new data source (admin-only)
+PUT    /api/v1/endpoints/{ds_id}      — update a data source by ID (admin-only)
+DELETE /api/v1/endpoints/{ds_id}      — remove a data source by ID (admin-only)
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import time
-from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 
-from app.core.config.settings import REPO_ROOT, settings
 from app.core.security.dependencies import UserContext, get_current_user
 from app.core.security.policy import assert_action_allowed
 from app.integrations.appscan_api.client import (
@@ -30,6 +29,8 @@ from app.integrations.appscan_api.client import (
     AsocRequestError,
     AsocResponseFormatError,
 )
+from app.repositories import data_source_store
+from app.services import data_source_service
 
 router = APIRouter()
 
@@ -84,6 +85,7 @@ class EndpointUpdateRequest(BaseModel):
     api_key: str | None = None
     api_secret: str | None = None
     verify_ssl: bool | None = None
+    enabled: bool | None = None
 
     @field_validator("url")
     @classmethod
@@ -97,56 +99,22 @@ class EndpointUpdateRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Persistence helpers
+# View helpers
 # ---------------------------------------------------------------------------
 
-def _env_path() -> Path:
-    """Return the primary .env file path (repo root)."""
-    return REPO_ROOT / ".env"
-
-
-def _save_endpoints(endpoints: list[dict[str, str]]) -> None:
-    """Persist *endpoints* to ASOC_ENDPOINTS_JSON in .env and update in-memory settings.
-
-    The in-memory update means changes take effect immediately without a restart.
-    The .env write ensures the config survives a restart.
-    """
-    json_val = json.dumps(endpoints, separators=(",", ":"))
-    env_file = _env_path()
-
-    if env_file.exists():
-        lines = env_file.read_text(encoding="utf-8").splitlines()
-    else:
-        lines = []
-
-    new_lines: list[str] = []
-    found = False
-    for line in lines:
-        if line.startswith("ASOC_ENDPOINTS_JSON=") or line.startswith("ASOC_ENDPOINTS_JSON ="):
-            new_lines.append(f"ASOC_ENDPOINTS_JSON={json_val}")
-            found = True
-        else:
-            new_lines.append(line)
-    if not found:
-        new_lines.append(f"ASOC_ENDPOINTS_JSON={json_val}")
-
-    env_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-    # Hot-reload: update the live singleton so the change takes effect immediately.
-    settings.asoc_endpoints_json = json_val
-
-
-def _managed_view(eps: list[dict[str, str]]) -> list[dict[str, Any]]:
+def _managed_view(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return a list safe for the management API — includes api_key, masks secret."""
     return [
         {
-            "index": i,
-            "url": ep["url"],
-            "label": ep["label"],
-            "api_key": ep.get("key", ""),
-            "has_secret": bool(ep.get("secret")),
-            "verify_ssl": ep.get("verify", True),
+            "id": ds.get("id", ""),
+            "url": ds.get("url", ""),
+            "label": ds.get("label", ""),
+            "api_key": ds.get("api_key", ""),
+            "has_secret": bool(ds.get("api_secret")),
+            "verify_ssl": ds.get("verify_ssl", True),
+            "enabled": ds.get("enabled", True),
         }
-        for i, ep in enumerate(eps)
+        for ds in sources
     ]
 
 
@@ -154,14 +122,14 @@ def _managed_view(eps: list[dict[str, str]]) -> list[dict[str, Any]]:
 # Probe helper
 # ---------------------------------------------------------------------------
 
-async def _probe_endpoint(ep: dict[str, str]) -> dict[str, Any]:
-    """Attempt a lightweight API call to verify endpoint connectivity.
+async def _probe_data_source(ds: dict[str, Any]) -> dict[str, Any]:
+    """Attempt a lightweight API call to verify data source connectivity.
 
-    Returns a dict with keys: url, label, ok, latency_ms, error.
+    Returns a dict with keys: id, url, label, ok, latency_ms, error.
     Credentials are never included in the response.
     """
-    verify = ep.get("verify", True)
-    client = AsocApiClient.make(ep["url"], ep["key"], ep["secret"], verify=verify)
+    verify = ds.get("verify_ssl", True)
+    client = AsocApiClient.make(ds["url"], ds["api_key"], ds["api_secret"], verify=verify)
     start = time.monotonic()
     error: str | None = None
     ok = False
@@ -188,8 +156,9 @@ async def _probe_endpoint(ep: dict[str, str]) -> dict[str, Any]:
 
     elapsed_ms = round((time.monotonic() - start) * 1000)
     return {
-        "url": ep["url"],
-        "label": ep["label"],
+        "id": ds.get("id", ""),
+        "url": ds["url"],
+        "label": ds.get("label", ""),
         "ok": ok,
         "latency_ms": elapsed_ms if ok else None,
         "error": error,
@@ -204,15 +173,15 @@ async def _probe_endpoint(ep: dict[str, str]) -> dict[str, Any]:
 async def list_endpoints(
     user: Annotated[UserContext, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    """Return all configured ASoC endpoints (label + URL only — no credentials)."""
+    """Return all configured ASoC data sources (label + URL only — no credentials)."""
     assert_action_allowed("view_endpoints", user.role)
-    raw_endpoints = settings.all_asoc_endpoints()
+    sources = data_source_service.list_all(include_disabled=False)
     return {
         "endpoints": [
-            {"index": i, "url": ep["url"], "label": ep["label"]}
-            for i, ep in enumerate(raw_endpoints)
+            {"id": ds["id"], "url": ds["url"], "label": ds["label"]}
+            for ds in sources
         ],
-        "total": len(raw_endpoints),
+        "total": len(sources),
     }
 
 
@@ -220,15 +189,15 @@ async def list_endpoints(
 async def manage_list_endpoints(
     user: Annotated[UserContext, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    """Return all endpoints with api_key visible for editing (secret is masked).
+    """Return all data sources with api_key visible for editing (secret is masked).
 
     Restricted to PlatformAdmin and SecurityManager.
     """
     assert_action_allowed("manage_endpoints", user.role)
-    raw_endpoints = settings.all_asoc_endpoints()
+    sources = data_source_service.list_all(include_disabled=True)
     return {
-        "endpoints": _managed_view(raw_endpoints),
-        "total": len(raw_endpoints),
+        "endpoints": _managed_view(sources),
+        "total": len(sources),
     }
 
 
@@ -236,25 +205,26 @@ async def manage_list_endpoints(
 async def endpoint_status(
     user: Annotated[UserContext, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    """Probe connectivity for every configured ASoC endpoint (admin-only)."""
+    """Probe connectivity for every configured ASoC data source (admin-only)."""
     assert_action_allowed("check_endpoint_status", user.role)
-    raw_endpoints = settings.all_asoc_endpoints()
-    if not raw_endpoints:
+    sources = data_source_service.list_all(include_disabled=False)
+    if not sources:
         return {"results": [], "total": 0}
 
     probe_results = await asyncio.gather(
-        *[_probe_endpoint(ep) for ep in raw_endpoints],
+        *[_probe_data_source(ds) for ds in sources],
         return_exceptions=True,
     )
 
     results: list[dict[str, Any]] = []
     for idx, result in enumerate(probe_results):
-        ep = raw_endpoints[idx] if idx < len(raw_endpoints) else {}
+        ds = sources[idx] if idx < len(sources) else {}
         if isinstance(result, BaseException):
             results.append(
                 {
-                    "url": ep.get("url", "unknown"),
-                    "label": ep.get("label", f"endpoint[{idx}]"),
+                    "id": ds.get("id", ""),
+                    "url": ds.get("url", "unknown"),
+                    "label": ds.get("label", f"source[{idx}]"),
                     "ok": False,
                     "latency_ms": None,
                     "error": str(result),
@@ -266,6 +236,30 @@ async def endpoint_status(
     return {"results": results, "total": len(results)}
 
 
+@router.get("/identities")
+async def list_identities(
+    user: Annotated[UserContext, Depends(get_current_user)],
+    auto_refresh_stale: bool = False,
+) -> dict[str, Any]:
+    """Return per-data-source API user info for the sidebar identity pane."""
+    assert_action_allowed("view_endpoints", user.role)
+    if auto_refresh_stale:
+        await data_source_service.refresh_stale_identities()
+    identities = data_source_service.get_identities()
+    return {"identities": identities, "total": len(identities)}
+
+
+@router.post("/refresh-identities")
+async def refresh_identities(
+    user: Annotated[UserContext, Depends(get_current_user)],
+) -> dict[str, Any]:
+    """Refresh cached API user info from ASoC for all enabled data sources."""
+    assert_action_allowed("manage_endpoints", user.role)
+    await data_source_service.refresh_all_api_user_info()
+    identities = data_source_service.get_identities()
+    return {"identities": identities, "total": len(identities)}
+
+
 # ---------------------------------------------------------------------------
 # Mutation routes
 # ---------------------------------------------------------------------------
@@ -275,59 +269,59 @@ async def create_endpoint(
     body: EndpointCreateRequest,
     user: Annotated[UserContext, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    """Add a new ASoC endpoint.  Changes take effect immediately (no restart required)."""
+    """Add a new ASoC data source.  Changes take effect immediately (no restart required)."""
     assert_action_allowed("manage_endpoints", user.role)
-    eps = list(settings.all_asoc_endpoints())
-    eps.append(
-        {
-            "url": body.url,
-            "key": body.api_key,
-            "secret": body.api_secret,
-            "label": body.label,
-            "verify": body.verify_ssl,
-        }
+    data_source_service.create(
+        label=body.label,
+        url=body.url,
+        api_key=body.api_key,
+        api_secret=body.api_secret,
+        verify_ssl=body.verify_ssl,
     )
-    _save_endpoints(eps)
-    return {"endpoints": _managed_view(eps), "total": len(eps)}
+    sources = data_source_service.list_all(include_disabled=True)
+    return {"endpoints": _managed_view(sources), "total": len(sources)}
 
 
-@router.put("/{idx}")
+@router.put("/{ds_id}")
 async def update_endpoint(
-    idx: int,
+    ds_id: str,
     body: EndpointUpdateRequest,
     user: Annotated[UserContext, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    """Update an existing endpoint by index.  Changes take effect immediately."""
+    """Update an existing data source by ID.  Changes take effect immediately."""
     assert_action_allowed("manage_endpoints", user.role)
-    eps = list(settings.all_asoc_endpoints())
-    if idx < 0 or idx >= len(eps):
-        raise HTTPException(status_code=404, detail=f"No endpoint at index {idx}")
-    ep = dict(eps[idx])
+    existing = data_source_store.get_data_source(ds_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"No data source with id {ds_id!r}")
+    fields: dict[str, Any] = {}
     if body.url is not None:
-        ep["url"] = body.url
+        fields["url"] = body.url
     if body.label is not None:
-        ep["label"] = body.label.strip()
+        fields["label"] = body.label.strip()
     if body.api_key is not None:
-        ep["key"] = body.api_key.strip()
+        fields["api_key"] = body.api_key.strip()
     if body.api_secret is not None:
-        ep["secret"] = body.api_secret
+        fields["api_secret"] = body.api_secret
     if body.verify_ssl is not None:
-        ep["verify"] = body.verify_ssl
-    eps[idx] = ep
-    _save_endpoints(eps)
-    return {"endpoints": _managed_view(eps), "total": len(eps)}
+        fields["verify_ssl"] = body.verify_ssl
+    if body.enabled is not None:
+        fields["enabled"] = body.enabled
+    if fields:
+        data_source_store.update_data_source(ds_id, **fields)
+    sources = data_source_service.list_all(include_disabled=True)
+    return {"endpoints": _managed_view(sources), "total": len(sources)}
 
 
-@router.delete("/{idx}")
+@router.delete("/{ds_id}")
 async def delete_endpoint(
-    idx: int,
+    ds_id: str,
     user: Annotated[UserContext, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    """Remove an endpoint by index.  Changes take effect immediately."""
+    """Remove a data source by ID.  Changes take effect immediately."""
     assert_action_allowed("manage_endpoints", user.role)
-    eps = list(settings.all_asoc_endpoints())
-    if idx < 0 or idx >= len(eps):
-        raise HTTPException(status_code=404, detail=f"No endpoint at index {idx}")
-    eps.pop(idx)
-    _save_endpoints(eps)
-    return {"endpoints": _managed_view(eps), "total": len(eps)}
+    existing = data_source_store.get_data_source(ds_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"No data source with id {ds_id!r}")
+    data_source_store.delete_data_source(ds_id)
+    sources = data_source_service.list_all(include_disabled=True)
+    return {"endpoints": _managed_view(sources), "total": len(sources)}

@@ -29,6 +29,9 @@ EXPECTED_ACTIONS = {
     "manage_report_schedules",
     "view_audit_events",
     "view_pipeline_bom",
+    "view_endpoints",
+    "check_endpoint_status",
+    "manage_endpoints",
 }
 
 

@@ -34,9 +34,10 @@
 
 ## Configure Environment
 1. Copy `.env.example` to `.env`.
-2. Set `ASOC_SERVICE_URL`, `ASOC_API_KEY`, and `ASOC_API_SECRET`.
+2. Set `ASOC_SERVICE_URL`, `ASOC_API_KEY`, and `ASOC_API_SECRET` for the **primary** data source.
 	- US cloud base: `https://cloud.appscan.com`
 	- EU cloud base: `https://eu.cloud.appscan.com`
+	- AppScan 360 base: your custom URL
 	- Effective v4 endpoint pattern is `<ASOC_SERVICE_URL>/api/v4/...`
 	- Legacy value `https://cloud.appscan.com/eu` is normalized to `https://eu.cloud.appscan.com`.
 3. Keep `ASOC_READ_ONLY=true`.
@@ -99,7 +100,143 @@
 ## First Login
 - Use bootstrap login endpoint in local mode, then map role and accessible asset groups.
 
+## Multi-Data-Source Configuration (v1.4.0+)
+After initial setup, additional ASoC/AppScan 360 instances can be configured through the dashboard UI or API.
+
+### Via Dashboard UI
+1. Log in as PlatformAdmin or SecurityManager.
+2. Open the Data Sources sidebar panel.
+3. Click "Manage" to add, edit, or remove data source connections.
+4. For each data source, provide: label, URL, API key, API secret, and SSL verification preference.
+   - For AppScan 360 instances with self-signed or internal CA certificates, check **"Skip SSL verification (for self-signed / local TLS certs)"** in the Add/Edit form. This sets `verify_ssl: false` for that data source so the backend does not validate the TLS certificate chain.
+   - Leave the checkbox unchecked (default) for standard ASoC cloud instances.
+5. Use "Check Status" to verify connectivity before enabling.
+
+### Via API
+```bash
+# Add a data source
+curl -X POST http://127.0.0.1:8000/api/v1/endpoints \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"label": "EU Cloud", "url": "https://eu.cloud.appscan.com", "api_key": "...", "api_secret": "...", "verify_ssl": true}'
+
+# Check connectivity
+curl -X POST http://127.0.0.1:8000/api/v1/endpoints/<id>/check-status \
+  -H "Authorization: Bearer <token>"
+
+# List all data sources
+curl http://127.0.0.1:8000/api/v1/endpoints \
+  -H "Authorization: Bearer <token>"
+```
+
+### SSL Verification
+- Set `verify_ssl: true` (default) for ASoC cloud instances with valid certificates.
+- Set `verify_ssl: false` for AppScan 360 instances with self-signed or internal CA certificates.
+- When disabled, the backend logs a warning per data source.
+
 ## OIDC Optional Flow
 - Call `GET /api/v1/auth/mode` to verify backend mode and OIDC readiness.
 - If mode is `oidc`, provide external bearer token from your IdP in the frontend token input.
 - If OIDC settings are missing and mode is `oidc`, protected routes return `503` with missing fields.
+
+## Docker Compose Deployment (v1.4.3+)
+
+A single-command local stack is available via Docker Compose.
+
+### Prerequisites
+- Docker 24+ and Docker Compose v2
+
+### Quick Start
+```bash
+cd infra/compose
+
+# Start the full stack (PostgreSQL + dashboard)
+docker compose up -d
+
+# Verify
+curl http://localhost:8000/health
+```
+
+### Environment Variables
+Create `infra/compose/.env` or export these before running:
+```bash
+ASOC_SERVICE_URL=https://cloud.appscan.com
+ASOC_API_KEY=<your-api-key>
+ASOC_API_SECRET=<your-api-secret>
+JWT_SECRET=<random-secret>
+FRONTEND_ORIGIN=http://localhost:8000
+```
+
+### Ports
+| Service | Host Port | Container Port |
+|---|---|---|
+| PostgreSQL | 55432 | 5432 |
+| Dashboard App | 8000 | 8000 |
+
+### Stopping
+```bash
+docker compose down        # stop containers
+docker compose down -v     # stop + remove volumes (deletes DB data)
+```
+
+## Azure Deployment (v1.4.3+)
+
+An Azure Bicep template deploys the production stack: App Service, PostgreSQL Flexible Server, Key Vault, and Application Insights.
+
+### Prerequisites
+- Azure CLI (`az`) authenticated
+- A resource group created
+
+### Deploy
+```bash
+az deployment group create \
+  --resource-group <rg-name> \
+  --template-file infra/azure/main.bicep \
+  --parameters infra/azure/main.parameters.json \
+  --parameters \
+    baseName=aspm-dashboard \
+    dbAdminPassword=<secure-password> \
+    jwtSecret=<random-secret>
+```
+
+### Resources Created
+| Resource | SKU | Purpose |
+|---|---|---|
+| App Service (Linux/Docker) | B1 (default) | Hosts dashboard container |
+| PostgreSQL Flexible Server | B1ms, v16 | Application database |
+| Key Vault | RBAC mode | Secrets management |
+| Application Insights + Log Analytics | Default | Observability |
+
+### Post-Deploy
+1. Push Docker image to a container registry and configure App Service to pull it.
+2. Set ASoC credentials in Key Vault secrets.
+3. Verify `https://<webAppUrl>/health`.
+
+## CSV Export for PowerBI / Excel (v1.4.3+)
+
+Four streaming CSV endpoints are available for external BI tool integration.
+
+### Endpoints
+| Endpoint | Description |
+|---|---|
+| `GET /api/v1/export/scans.csv` | All scans with severity counts |
+| `GET /api/v1/export/applications.csv` | All applications with risk rating and issue counts |
+| `GET /api/v1/export/issues.csv` | All issues with CWE, location, dates |
+| `GET /api/v1/export/summary.csv` | KPI pivot table + Top 20 apps |
+
+### Usage
+```bash
+# Export scans to CSV
+curl -o scans.csv http://127.0.0.1:8000/api/v1/export/scans.csv \
+  -H "Authorization: Bearer <token>"
+
+# Export with specific data sources
+curl -o issues.csv "http://127.0.0.1:8000/api/v1/export/issues.csv?data_source_ids=<id1>&data_source_ids=<id2>" \
+  -H "Authorization: Bearer <token>"
+```
+
+### PowerBI Integration
+1. In PowerBI Desktop, use **Get Data → Web**.
+2. Set URL to `http://<dashboard-host>:8000/api/v1/export/scans.csv`.
+3. Under **Advanced**, add HTTP header: `Authorization: Bearer <token>`.
+4. Set refresh schedule as needed.

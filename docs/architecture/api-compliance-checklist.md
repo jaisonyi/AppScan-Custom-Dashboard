@@ -55,12 +55,22 @@ Source of truth: https://cloud.appscan.com/swagger/index.html
 | `POST /api/v1/reports/schedules/{schedule_id}/run-now` | Yes | N/A (internal persistence) | Pending Integration | Manual immediate execution with report history and audit event creation. |
 | `GET /api/v1/audit/events` | Yes | N/A (internal persistence) | Pending Integration | Audit trail reader for authorized roles. |
 | `GET /api/v1/pipeline-bom` | Yes | N/A (current scaffold) | Pending Integration | Internal scaffold endpoint, no direct ASoC call. |
+| `GET /api/v1/endpoints` | Yes | N/A (internal persistence) | N/A | Lists configured data source connections from `data_sources` table. |
+| `POST /api/v1/endpoints` | Yes | N/A (internal persistence) | N/A | Adds a new data source connection configuration. |
+| `PUT /api/v1/endpoints/{id}` | Yes | N/A (internal persistence) | N/A | Updates data source connection settings (URL, label, verify_ssl, etc.). |
+| `DELETE /api/v1/endpoints/{id}` | Yes | N/A (internal persistence) | N/A | Removes a data source connection configuration. |
+| `POST /api/v1/endpoints/{id}/check-status` | Yes | `POST /api/v4/Account/ApiKeyLogin` on target instance | Compliant | Probes target ASoC instance connectivity and auth using stored credentials. |
+| `GET /api/v1/export/scans.csv` | Yes | Derived from `GET /api/v4/Scans` via `aggregate_list()` | Compliant | Streaming CSV export for PowerBI/Excel; auth + asset-group scoped. |
+| `GET /api/v1/export/applications.csv` | Yes | Derived from `GET /api/v4/Apps` via `aggregate_list()` | Compliant | Streaming CSV export for PowerBI/Excel; auth + asset-group scoped. |
+| `GET /api/v1/export/issues.csv` | Yes | Derived from `GET /api/v4/Issues/Application/{scopeId}` via `aggregate_list()` | Compliant | Streaming CSV export for PowerBI/Excel; auth + asset-group scoped. |
+| `GET /api/v1/export/summary.csv` | Yes | Derived from multiple read endpoints (scans, apps, issues) | Compliant | KPI pivot table + Top 20 apps; auth + asset-group scoped. |
 
 ## Local Worker Coverage
 
 - Background scheduler worker: `backend/app/workers/report_scheduler.py`
 - Cron utility: `backend/app/workers/schedule_utils.py`
-- Analytics cache snapshots: `analytics_snapshots` table in `data/aspm.db`
+- Analytics cache snapshots: `analytics_snapshots` table in PostgreSQL
+- Data source configurations: `data_sources` table in PostgreSQL
 - Runtime behavior:
   - polls enabled schedules with due `next_run_at`
   - appends report history entries
@@ -79,3 +89,6 @@ Source of truth: https://cloud.appscan.com/swagger/index.html
 - [x] Retries by switching auth mode on unauthorized/non-JSON responses
 - [x] Applies role and asset-group scope controls on all protected API routes
 - [x] Supports optional OIDC mode without breaking local mode
+- [x] Multi-data-source aggregation: all configured sources use read-only connectors
+- [x] Data source `verify_ssl` threaded through to `httpx.AsyncClient`
+- [x] CSV export endpoints reuse existing read-only aggregation; no new ASoC mutations introduced

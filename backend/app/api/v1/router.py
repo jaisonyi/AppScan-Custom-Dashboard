@@ -8,6 +8,7 @@ from app.api.v1.routes import (
 	auth,
 	dashboard,
 	endpoints,
+	exports,
 	issues,
 	pipeline_bom,
 	reports,
@@ -26,3 +27,4 @@ api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
 api_router.include_router(pipeline_bom.router, prefix="/pipeline-bom", tags=["pipeline-bom"])
 api_router.include_router(audit.router, prefix="/audit", tags=["audit"])
 api_router.include_router(endpoints.router, prefix="/endpoints", tags=["endpoints"])
+api_router.include_router(exports.router, prefix="/export", tags=["export"])

@@ -1,0 +1,51 @@
+---
+title: "AppScan Custom Dashboard — Container View (C4 Level 2)"
+---
+graph TB
+    subgraph Users["Users (Browser)"]
+        USER["Authenticated User\n(Role-scoped)"]
+    end
+
+    subgraph "AppScan Custom Dashboard Platform"
+        subgraph Frontend["React Web UI — :5173 / served by FastAPI"]
+            SPA["SPA\nReact 18 + TypeScript 5.6\nVite 5.4 + Recharts"]
+        end
+
+        subgraph Backend["FastAPI Backend — :8000"]
+            API["REST API\n/api/v1/*\nAuth + RBAC + Asset-Group Scoping"]
+            BG_SCHED["Report Scheduler\n(Background Worker)"]
+            BG_WARM["Analytics Prewarm\n(Background Worker)"]
+        end
+
+        subgraph DataStore["PostgreSQL — :55432"]
+            DB["aspm database\ndata_sources, dashboards,\nreport_templates, report_schedules,\nreport_history, audit_events,\nanalytics_snapshots"]
+        end
+
+        subgraph FileStore["File System"]
+            EXPORTS["data/exports/\nReport Artifacts (JSON)"]
+        end
+    end
+
+    subgraph External["External — ASoC Instances (Read-Only)"]
+        ASOC1["ASoC Cloud Instance 1"]
+        ASOC2["ASoC Cloud Instance 2"]
+        ASOC3["AppScan 360 Instance"]
+    end
+
+    subgraph Auth["Identity (Optional)"]
+        OIDC["OIDC Provider"]
+    end
+
+    USER -->|"HTTPS"| SPA
+    SPA -->|"Axios\nBearer JWT"| API
+    API -->|"SQLAlchemy 2.0\npsycopg 3"| DB
+    API -->|"Read/Write JSON"| EXPORTS
+    BG_SCHED -->|"Poll schedules\n& generate reports"| DB
+    BG_SCHED -->|"Write artifacts"| EXPORTS
+    BG_WARM -->|"Refresh cache"| API
+
+    API -->|"httpx async\nGET only"| ASOC1
+    API -->|"httpx async\nGET only"| ASOC2
+    API -->|"httpx async\nGET only"| ASOC3
+
+    API -.->|"JWKS validation"| OIDC

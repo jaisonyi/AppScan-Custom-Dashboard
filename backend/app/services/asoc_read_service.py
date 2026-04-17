@@ -525,7 +525,9 @@ class AsocReadService:
         self._client = AsocApiClient()
 
     @classmethod
-    def for_endpoint(cls, url: str, key: str, secret: str) -> "AsocReadService":
+    def for_endpoint(
+        cls, url: str, key: str, secret: str, *, verify: bool | str = True,
+    ) -> "AsocReadService":
         """Return a service instance bound to a specific ASoC endpoint.
 
         Use this for multi-endpoint deployments where each configured endpoint
@@ -533,7 +535,7 @@ class AsocReadService:
         in-memory cache state with other instances.
         """
         instance = cls.__new__(cls)
-        instance._client = AsocApiClient.make(url, key, secret)
+        instance._client = AsocApiClient.make(url, key, secret, verify=verify)
         return instance
 
     @staticmethod
@@ -1543,7 +1545,7 @@ class AsocReadService:
             else:
                 _logger.warning("list_issues: no applications found; falling back to org-level endpoint")
         except Exception as exc:
-            _logger.warning("list_issues: per-app approach failed (%s); falling back to org-level endpoint", exc)
+            _logger.warning("list_issues: per-app approach failed (%s: %s); falling back to org-level endpoint", type(exc).__name__, exc)
 
         # FALLBACK: org-level issue listing (may be truncated by pagination caps).
         try:
@@ -1553,7 +1555,7 @@ class AsocReadService:
                 _logger.info("list_issues: org-level fallback returned %d issues", len(org_mapped))
                 return org_mapped
         except Exception as exc:
-            _logger.warning("list_issues: org-level fallback also failed: %s", exc)
+            _logger.warning("list_issues: org-level fallback also failed: %s: %s", type(exc).__name__, exc)
 
         if use_mock_on_error:
             return mock_data.issues()
@@ -1695,9 +1697,10 @@ class AsocReadService:
                         )
                 except Exception as exc:
                     _logger.warning(
-                        "list_issues_for_applications: failed to fetch issues for app %s: %s",
-                        app_id,
-                        exc,
+                            "list_issues_for_applications: failed to fetch issues for app %s: %s: %s",
+                            app_id,
+                            type(exc).__name__,
+                            exc,
                     )
                     return []
                 return self._map_issue_items(payload_items, default_app_id=app_id)

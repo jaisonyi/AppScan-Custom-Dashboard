@@ -119,3 +119,35 @@ class TestListAssetGroups:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == len(FAKE_ASSET_GROUPS)
+
+
+class TestListAssetGroupsDataSourceIds:
+    def test_forwards_data_source_ids(self):
+        app.dependency_overrides[get_current_user] = _security_manager
+        with patch(
+            "app.api.v1.routes.asset_groups.aggregate_list",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_agg:
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.get("/api/v1/asset-groups?data_source_ids=ds-1&data_source_ids=ds-2")
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        mock_agg.assert_called_once()
+        assert mock_agg.call_args.kwargs["data_source_ids"] == ["ds-1", "ds-2"]
+
+    def test_no_data_source_ids_passes_none(self):
+        app.dependency_overrides[get_current_user] = _security_manager
+        with patch(
+            "app.api.v1.routes.asset_groups.aggregate_list",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_agg:
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.get("/api/v1/asset-groups")
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        mock_agg.assert_called_once()
+        assert mock_agg.call_args.kwargs["data_source_ids"] is None

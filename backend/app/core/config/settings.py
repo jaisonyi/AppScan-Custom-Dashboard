@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     analytics_cache_cleanup_interval_seconds: int = 600
     analytics_prewarm_enabled: bool = True
     analytics_prewarm_interval_seconds: int = 1800
+    identity_probe_ttl_seconds: int = 86400
 
     report_scheduler_enabled: bool = True
     report_scheduler_interval_seconds: int = 30

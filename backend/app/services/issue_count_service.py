@@ -10,7 +10,6 @@ from app.services.multi_endpoint import (
     aggregate_risk_heatmap,
     aggregate_status_distribution,
     aggregate_top_apps,
-    get_endpoint_services,
 )
 
 logger = logging.getLogger(__name__)

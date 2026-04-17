@@ -29,7 +29,7 @@ The extractor must use a 3-phase approach:
 
 ### Diagnostic Check
 ```bash
-cd /Users/dongillee/asoc-aspm-dashboard/backend
+cd backend
 TOKEN=$(../.venv/bin/python -c "
 import sys; sys.path.insert(0,'.')
 from app.core.security.auth import create_access_token
@@ -37,7 +37,7 @@ print(create_access_token('ops','PlatformAdmin',[]))
 ")
 curl -sS -m 30 "http://127.0.0.1:8000/api/v1/analytics/bundle" \
   -H "Authorization: Bearer $TOKEN" \
-  | /usr/bin/python3 -c "
+  | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 rows = d.get('scan_time_trend',{}).get('by_period',{}).get('month',[])
@@ -71,7 +71,7 @@ If the extractor only reads a single field name, most scans return size 0.
 
 ### Diagnostic Check
 ```bash
-cd /Users/dongillee/asoc-aspm-dashboard/backend
+cd backend
 TOKEN=$(../.venv/bin/python -c "
 import sys; sys.path.insert(0,'.')
 from app.core.security.auth import create_access_token
@@ -79,7 +79,7 @@ print(create_access_token('ops','PlatformAdmin',[]))
 ")
 curl -sS -m 30 "http://127.0.0.1:8000/api/v1/analytics/bundle" \
   -H "Authorization: Bearer $TOKEN" \
-  | /usr/bin/python3 -c "
+  | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 rows = d.get('file_size_profile',{}).get('by_period',{}).get('month',[])
@@ -127,7 +127,7 @@ A `<Legend>` must accompany the chart to distinguish the two series.
 
 ### Diagnostic Check
 ```bash
-cd /Users/dongillee/asoc-aspm-dashboard/backend
+cd backend
 TOKEN=$(../.venv/bin/python -c "
 import sys; sys.path.insert(0,'.')
 from app.core.security.auth import create_access_token
@@ -135,7 +135,7 @@ print(create_access_token('ops','PlatformAdmin',[]))
 ")
 curl -sS -m 30 "http://127.0.0.1:8000/api/v1/analytics/bundle" \
   -H "Authorization: Bearer $TOKEN" \
-  | /usr/bin/python3 -c "
+  | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 rows = d.get('dast_page_coverage',{}).get('by_period',{}).get('month',[])
@@ -160,7 +160,7 @@ for r in rows[-3:]: print(r)
 
 ### Verification
 ```bash
-cd /Users/dongillee/asoc-aspm-dashboard/backend
+cd backend
 ../.venv/bin/python - <<'EOF'
 import sys; sys.path.insert(0,'.')
 import asyncio

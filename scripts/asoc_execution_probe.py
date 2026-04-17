@@ -4,11 +4,12 @@ ASoC Execution Detail Probe
 - Reports all fields relevant to: duration, SAST size, SCA size, DAST page coverage
 """
 import httpx
+import os
 import sys
 
-BASE = "https://cloud.appscan.com"
-KEY_ID = "6ca5b207-406b-8fd7-1b9a-a74cfd1c9deb"
-KEY_SECRET = "SCLq1NYsDcG46m1cLscNcaI0YCrT0kHO6zXp6cwdpixa"
+BASE = os.environ.get("ASOC_SERVICE_URL", "https://cloud.appscan.com")
+KEY_ID = os.environ["ASOC_API_KEY"]
+KEY_SECRET = os.environ["ASOC_API_SECRET"]
 
 
 def login():

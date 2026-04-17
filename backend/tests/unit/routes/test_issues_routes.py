@@ -129,3 +129,35 @@ class TestListIssues:
                 resp = client.get("/api/v1/issues")
         app.dependency_overrides.clear()
         assert resp.status_code == 200
+
+
+class TestListIssuesDataSourceIds:
+    def test_forwards_data_source_ids(self):
+        app.dependency_overrides[get_current_user] = _admin
+        with patch(
+            "app.api.v1.routes.issues.aggregate_list",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_agg:
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.get("/api/v1/issues?data_source_ids=ds-1&data_source_ids=ds-2")
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        mock_agg.assert_called_once()
+        assert mock_agg.call_args.kwargs["data_source_ids"] == ["ds-1", "ds-2"]
+
+    def test_no_data_source_ids_passes_none(self):
+        app.dependency_overrides[get_current_user] = _admin
+        with patch(
+            "app.api.v1.routes.issues.aggregate_list",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_agg:
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.get("/api/v1/issues")
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        mock_agg.assert_called_once()
+        assert mock_agg.call_args.kwargs["data_source_ids"] is None

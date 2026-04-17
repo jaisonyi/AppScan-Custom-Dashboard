@@ -215,3 +215,35 @@ class TestDastPageCoverageDiagnostics:
         assert resp.status_code == 200
         # Verify the service was called with max_scans=3
         mock_service.diagnose_dast_page_coverage.assert_called_once_with(scan_ids=None, max_scans=3)
+
+
+class TestListScansDataSourceIds:
+    def test_forwards_data_source_ids(self):
+        app.dependency_overrides[get_current_user] = _admin
+        with patch(
+            "app.api.v1.routes.scans.aggregate_list",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_agg:
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.get("/api/v1/scans?data_source_ids=ds-1&data_source_ids=ds-2")
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        mock_agg.assert_called_once()
+        assert mock_agg.call_args.kwargs["data_source_ids"] == ["ds-1", "ds-2"]
+
+    def test_no_data_source_ids_passes_none(self):
+        app.dependency_overrides[get_current_user] = _admin
+        with patch(
+            "app.api.v1.routes.scans.aggregate_list",
+            new_callable=AsyncMock,
+            return_value=[],
+        ) as mock_agg:
+            with TestClient(app, raise_server_exceptions=True) as client:
+                resp = client.get("/api/v1/scans")
+        app.dependency_overrides.clear()
+
+        assert resp.status_code == 200
+        mock_agg.assert_called_once()
+        assert mock_agg.call_args.kwargs["data_source_ids"] is None

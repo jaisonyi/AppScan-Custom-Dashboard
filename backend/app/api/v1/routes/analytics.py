@@ -83,6 +83,7 @@ def _build_cache_key(
     to_date: str | None,
     compliance_rule: str,
     compliance_threshold: str,
+    data_source_ids: list[str] | None = None,
 ) -> str:
     payload = {
         "role": user.role,
@@ -98,7 +99,8 @@ def _build_cache_key(
         "to_date": to_date,
         "compliance_rule": compliance_rule,
         "compliance_threshold": compliance_threshold,
-        "v": 17,
+        "data_source_ids": sorted(data_source_ids) if data_source_ids else [],
+        "v": 19,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -1243,6 +1245,7 @@ async def _build_bundle(
     compliance_rule: str = "critical_high",
     compliance_threshold: str = "high",
     source_refresh: bool = False,
+    data_source_ids: list[str] | None = None,
 ) -> dict:
     has_scope_filter = bool(asset_group_ids or application_ids or (application_name or "").strip())
 
@@ -1255,10 +1258,10 @@ async def _build_bundle(
         # Fast path for scoped requests: avoid full organisation issue pull when source
         # cache is cold — fetch scoped data from all endpoints concurrently.
         _raw_apps, _raw_groups, _raw_scans, tenant_info = await asyncio.gather(
-            aggregate_list("list_applications", use_mock_on_error=False),
-            aggregate_list("list_asset_groups", use_mock_on_error=False),
-            aggregate_list("list_scans", use_mock_on_error=False),
-            aggregate_tenant_info(),
+            aggregate_list("list_applications", use_mock_on_error=False, data_source_ids=data_source_ids),
+            aggregate_list("list_asset_groups", use_mock_on_error=False, data_source_ids=data_source_ids),
+            aggregate_list("list_scans", use_mock_on_error=False, data_source_ids=data_source_ids),
+            aggregate_tenant_info(data_source_ids=data_source_ids),
         )
         all_apps = filter_by_asset_group(
             _raw_apps,
@@ -1297,23 +1300,31 @@ async def _build_bundle(
             ["asset_group_id"],
         )
         all_issues = filter_by_asset_group(
-            await aggregate_list("list_issues_for_applications", scoped_application_ids, use_mock_on_error=False),
+            await aggregate_list("list_issues_for_applications", scoped_application_ids, use_mock_on_error=False, data_source_ids=data_source_ids),
             user.asset_group_ids,
             user.role,
             ["asset_group_id"],
         )
     else:
+        # Warm-cache path: filter by data source in-memory when requested.
+        _ds_allowed: set[str] | None = set(data_source_ids) if data_source_ids else None
+
+        def _ds_filter(items: list[dict]) -> list[dict]:
+            if _ds_allowed is None:
+                return items
+            return [item for item in items if item.get("_data_source_id") in _ds_allowed]
+
         all_scans = filter_by_asset_group(
-            list(source_data.get("scans") or []), user.asset_group_ids, user.role, ["asset_group_id"]
+            _ds_filter(list(source_data.get("scans") or [])), user.asset_group_ids, user.role, ["asset_group_id"]
         )
         all_issues = filter_by_asset_group(
-            list(source_data.get("issues") or []), user.asset_group_ids, user.role, ["asset_group_id"]
+            _ds_filter(list(source_data.get("issues") or [])), user.asset_group_ids, user.role, ["asset_group_id"]
         )
         all_apps = filter_by_asset_group(
-            list(source_data.get("applications") or []), user.asset_group_ids, user.role, ["asset_group_id"]
+            _ds_filter(list(source_data.get("applications") or [])), user.asset_group_ids, user.role, ["asset_group_id"]
         )
 
-        raw_asset_groups = list(source_data.get("asset_groups") or [])
+        raw_asset_groups = _ds_filter(list(source_data.get("asset_groups") or []))
         if user.role in {"PlatformAdmin", "SecurityManager"}:
             all_asset_groups = raw_asset_groups
         else:
@@ -1444,8 +1455,10 @@ async def _build_bundle(
     # When no scope filter is active, use the pre-computed stats from base data
     # (most efficient — already computed during aggregate_base_data()).
     # When a scope filter is active, recompute from the filtered apps list.
+    # When data_source_ids is active, always recompute — the pre-computed stats
+    # reflect ALL data sources and would be incorrect for a filtered subset.
     app_based_statistics: dict[str, Any] = {}
-    if not has_scope_filter and source_data is not None:
+    if not has_scope_filter and source_data is not None and not data_source_ids:
         app_based_statistics = dict(source_data.get("app_based_statistics") or {})
     if not app_based_statistics:
         # Recompute from the filtered apps list (handles scoped requests)
@@ -1460,10 +1473,10 @@ async def _build_bundle(
     # return org-wide counts that would silently override our correctly-filtered
     # in-memory statistics — skip the call in those cases.
     count_overrides: dict[str, int] = {}
-    if settings.asoc_use_count_endpoints and not has_dataset_scope_filter:
+    if settings.asoc_use_count_endpoints and not has_dataset_scope_filter and not has_scope_filter:
         try:
             count_overrides = await asyncio.wait_for(
-                aggregate_issue_counts(),
+                aggregate_issue_counts(data_source_ids=data_source_ids),
                 timeout=settings.asoc_count_timeout_seconds,
             )
         except Exception as _count_exc:
@@ -1539,7 +1552,10 @@ async def _build_bundle(
         # it's available and larger than the per-issue-list count.  The per-issue list
         # only covers apps the credential can access; count_overrides covers the full
         # org-level Fixed count when the Count endpoint is reachable.
-        _resolved_count = max(_resolved_count, count_overrides.get("resolved", 0))
+        # Skip this override when a scope filter is active — the Count API returns
+        # org-wide numbers that would silently replace the correctly-scoped count.
+        if not has_scope_filter:
+            _resolved_count = max(_resolved_count, count_overrides.get("resolved", 0))
         # When dimension filters (issue_technologies, scan_types, etc.) are active,
         # app_based_statistics reflect the full org (unfiltered by these dimensions).
         # Use per-issue-list counts in that case so filter selections are reflected.
@@ -1572,8 +1588,8 @@ async def _build_bundle(
             "high_issues": _high_count,
             "medium_issues": _medium_count,
             "low_issues": _low_count,
-            "total_scans": int(app_based_statistics.get("total_scans", len(scans))),
-            "scan_count": int(app_based_statistics.get("total_scans", len(scans))),
+            "total_scans": len(scans) if has_dataset_scope_filter else int(app_based_statistics.get("total_scans", len(scans))),
+            "scan_count": len(scans) if has_dataset_scope_filter else int(app_based_statistics.get("total_scans", len(scans))),
             "running_scans": int(app_based_statistics.get("running_scans", open_scans)),
             "failed_scans": int(app_based_statistics.get("failed_scans", 0)),
             "open_scans": open_scans,
@@ -1730,6 +1746,7 @@ async def _refresh_snapshot_background(
     to_date: str | None,
     compliance_rule: str,
     compliance_threshold: str,
+    data_source_ids: list[str] | None = None,
 ) -> None:
     lock = _get_lock(cache_key)
     async with lock:
@@ -1752,6 +1769,7 @@ async def _refresh_snapshot_background(
                 compliance_rule=compliance_rule,
                 compliance_threshold=compliance_threshold,
                 source_refresh=False,
+                data_source_ids=data_source_ids,
             )
             fetched_at = _utc_now()
             _bundle_total_issues = int(
@@ -1786,6 +1804,7 @@ async def _get_bundle(
     compliance_rule: str = "critical_high",
     compliance_threshold: str = "high",
     refresh: bool = False,
+    data_source_ids: list[str] | None = None,
 ) -> tuple[dict, dict]:
     await _cleanup_cache_if_needed()
     cache_key = _build_cache_key(
@@ -1801,6 +1820,7 @@ async def _get_bundle(
         to_date=to_date,
         compliance_rule=compliance_rule,
         compliance_threshold=compliance_threshold,
+        data_source_ids=data_source_ids,
     )
     if not refresh:
         cached = sqlite_store.get_analytics_snapshot(cache_key)
@@ -1824,6 +1844,7 @@ async def _get_bundle(
                             to_date=to_date,
                             compliance_rule=compliance_rule,
                             compliance_threshold=compliance_threshold,
+                            data_source_ids=data_source_ids,
                         )
                     )
             freshness = _build_freshness(
@@ -1855,6 +1876,7 @@ async def _get_bundle(
                         to_date=to_date,
                         compliance_rule=compliance_rule,
                         compliance_threshold=compliance_threshold,
+                        data_source_ids=data_source_ids,
                     )
                 )
             freshness = _build_freshness(
@@ -1879,6 +1901,7 @@ async def _get_bundle(
             or (application_name or "").strip()
             or from_date
             or to_date
+            or data_source_ids
         )
         if not has_active_scope:
             latest = sqlite_store.get_latest_analytics_snapshot()
@@ -1901,6 +1924,7 @@ async def _get_bundle(
                             to_date=to_date,
                             compliance_rule=compliance_rule,
                             compliance_threshold=compliance_threshold,
+                            data_source_ids=data_source_ids,
                         )
                     )
                 freshness = _build_freshness(
@@ -1942,6 +1966,7 @@ async def _get_bundle(
                 compliance_rule=compliance_rule,
                 compliance_threshold=compliance_threshold,
                 source_refresh=refresh,
+                data_source_ids=data_source_ids,
             )
         except Exception:
             logger.exception("Analytics live build failed for key %s; serving last known snapshot if available", cache_key)
@@ -2000,6 +2025,7 @@ async def statistics(
     application_name: str | None = Query(default=None),
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict:
     assert_action_allowed("view_analytics", user.role)
@@ -2033,6 +2059,7 @@ async def statistics(
         application_name=application_name,
         from_date=from_date,
         to_date=to_date,
+        data_source_ids=data_source_ids,
         refresh=refresh,
     )
     payload = _hydrate_statistics_from_summary(bundle)
@@ -2059,6 +2086,7 @@ async def trend_chart(
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
     active_only: bool = Query(default=True),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> list[dict]:
     assert_action_allowed("view_analytics", user.role)
@@ -2092,6 +2120,7 @@ async def trend_chart(
         application_name=application_name,
         from_date=from_date,
         to_date=to_date,
+        data_source_ids=data_source_ids,
         refresh=refresh,
     )
     return bundle["trend_active"] if active_only else bundle["trend_all"]
@@ -2115,6 +2144,7 @@ async def kpi_chart(
     application_name: str | None = Query(default=None),
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> list[dict]:
     assert_action_allowed("view_analytics", user.role)
@@ -2148,6 +2178,7 @@ async def kpi_chart(
         application_name=application_name,
         from_date=from_date,
         to_date=to_date,
+        data_source_ids=data_source_ids,
         refresh=refresh,
     )
     return bundle["kpi"]
@@ -2171,6 +2202,7 @@ async def mttr_chart(
     application_name: str | None = Query(default=None),
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> list[dict]:
     assert_action_allowed("view_analytics", user.role)
@@ -2204,6 +2236,7 @@ async def mttr_chart(
         application_name=application_name,
         from_date=from_date,
         to_date=to_date,
+        data_source_ids=data_source_ids,
         refresh=refresh,
     )
     return bundle["mttr"]
@@ -2227,6 +2260,7 @@ async def portfolio_summary(
     application_name: str | None = Query(default=None),
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict:
     assert_action_allowed("view_analytics", user.role)
@@ -2260,6 +2294,7 @@ async def portfolio_summary(
         application_name=application_name,
         from_date=from_date,
         to_date=to_date,
+        data_source_ids=data_source_ids,
         refresh=refresh,
     )
     payload = dict(bundle["portfolio_summary"])
@@ -2285,6 +2320,7 @@ async def prioritization_chart(
     application_name: str | None = Query(default=None),
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict:
     assert_action_allowed("view_analytics", user.role)
@@ -2318,6 +2354,7 @@ async def prioritization_chart(
         application_name=application_name,
         from_date=from_date,
         to_date=to_date,
+        data_source_ids=data_source_ids,
         refresh=refresh,
     )
     payload = dict(bundle.get("prioritization") or {})
@@ -2344,6 +2381,7 @@ async def findings_series_chart(
     application_name: str | None = Query(default=None),
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict:
     assert_action_allowed("view_analytics", user.role)
@@ -2382,6 +2420,7 @@ async def findings_series_chart(
         application_name=application_name,
         from_date=from_date,
         to_date=to_date,
+        data_source_ids=data_source_ids,
         refresh=refresh,
     )
     series_bundle = bundle.get("findings_series") or {}
@@ -2412,6 +2451,7 @@ async def scan_series_chart(
     application_name: str | None = Query(default=None),
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict:
     assert_action_allowed("view_analytics", user.role)
@@ -2453,6 +2493,7 @@ async def scan_series_chart(
         application_name=application_name,
         from_date=from_date,
         to_date=to_date,
+        data_source_ids=data_source_ids,
         refresh=refresh,
     )
     series_by_source = bundle.get("scan_series_by_source") or {}
@@ -2490,6 +2531,7 @@ async def analytics_bundle(
     to_date: str | None = Query(default=None),
     compliance_rule: str | None = Query(default=None),
     compliance_threshold: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict:
     assert_action_allowed("view_analytics", user.role)
@@ -2541,6 +2583,7 @@ async def analytics_bundle(
         to_date=to_date,
         compliance_rule=normalized_compliance_rule,
         compliance_threshold=normalized_compliance_threshold,
+        data_source_ids=data_source_ids,
         refresh=refresh,
     )
 
@@ -2596,6 +2639,7 @@ async def workbench_trends_chart(
     to_date: str | None = Query(default=None),
     compliance_rule: str | None = Query(default=None),
     compliance_threshold: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict:
     assert_action_allowed("view_analytics", user.role)
@@ -2633,6 +2677,7 @@ async def workbench_trends_chart(
         to_date=to_date,
         compliance_rule=normalized_compliance_rule,
         compliance_threshold=normalized_compliance_threshold,
+        data_source_ids=data_source_ids,
         refresh=refresh,
     )
     payload = dict(bundle.get("workbench_trends") or {})
@@ -2657,6 +2702,7 @@ async def analytics_filter_options(
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
     vulnerability_limit: int = Query(default=2000, ge=50, le=10000),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict:
     assert_action_allowed("view_analytics", user.role)
@@ -2684,6 +2730,7 @@ async def analytics_filter_options(
         application_name=application_name,
         from_date=from_date,
         to_date=to_date,
+        data_source_ids=data_source_ids,
         refresh=refresh,
     )
     options = dict(bundle.get("issue_filter_options") or {})
@@ -2715,6 +2762,7 @@ async def get_issue_counts(
     scan_statuses: list[str] | None = Query(default=None),
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
 ) -> dict:
     """Lightweight endpoint returning accurate issue counts from /Count API.
 
@@ -2787,6 +2835,7 @@ async def get_issue_counts(
                 application_name=None,
                 from_date=from_date,
                 to_date=to_date,
+                data_source_ids=data_source_ids,
             )
             stats = bundle.get("statistics") or {}
             counts = {
@@ -2816,7 +2865,7 @@ async def get_issue_counts(
 
         try:
             counts = await asyncio.wait_for(
-                aggregate_issue_counts(application_id=scoped_app_id),
+                aggregate_issue_counts(application_id=scoped_app_id, data_source_ids=data_source_ids),
                 timeout=settings.asoc_count_timeout_seconds,
             )
         except Exception as exc:
@@ -2841,6 +2890,7 @@ async def get_issue_counts(
                     application_name=None,
                     from_date=None,
                     to_date=None,
+                    data_source_ids=data_source_ids,
                 )
                 stats = bundle.get("statistics") or {}
                 if stats.get("total_issues", 0):
@@ -2891,6 +2941,7 @@ async def get_chart_data(
     scan_statuses: list[str] | None = Query(default=None),
     from_date: str | None = Query(default=None),
     to_date: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
     refresh: bool = Query(default=False),
 ) -> dict:
     """All chart data in one call for the dashboard.
@@ -2939,6 +2990,7 @@ async def get_chart_data(
             application_name=None,
             from_date=from_date,
             to_date=to_date,
+            data_source_ids=data_source_ids,
             refresh=refresh,
         )
         result = bundle.get("chart_data") or _empty
@@ -3067,6 +3119,7 @@ async def get_technology_breakdown(
     user: Annotated[UserContext, Depends(get_current_user)],
     application_id: str | None = Query(default=None),
     asset_group_id: str | None = Query(default=None),
+    data_source_ids: list[str] | None = Query(default=None),
 ) -> dict:
     """Issue counts by technology (SAST / DAST / SCA / IAST).
 
@@ -3081,7 +3134,7 @@ async def get_technology_breakdown(
 
     try:
         counts = await asyncio.wait_for(
-            aggregate_issue_counts(application_id=scoped_app_id),
+            aggregate_issue_counts(application_id=scoped_app_id, data_source_ids=data_source_ids),
             timeout=settings.asoc_count_timeout_seconds,
         )
     except Exception as exc:
@@ -3160,3 +3213,24 @@ async def get_severity_trend(
         "series": filtered,
         "_freshness": freshness,
     }
+
+
+@router.get("/worker-status")
+async def get_worker_status(
+    user: Annotated[UserContext, Depends(get_current_user)],
+) -> dict[str, Any]:
+    """Return the current state of the analytics background sync worker."""
+    assert_action_allowed("analytics:read", user.role)
+
+    from app.workers.analytics_prewarm import get_prewarm_status  # noqa: PLC0415
+
+    status = get_prewarm_status()
+
+    # Annotate with live cache freshness so the frontend can reflect it.
+    cache_payload = _BASE_DATA_CACHE.get("payload")
+    cache_expires_at = _BASE_DATA_CACHE.get("expires_at")
+    status["cache_populated"] = bool(cache_payload)
+    status["cache_expires_at"] = (
+        cache_expires_at.isoformat() if isinstance(cache_expires_at, datetime) else None
+    )
+    return status

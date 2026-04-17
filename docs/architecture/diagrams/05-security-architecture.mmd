@@ -1,0 +1,42 @@
+---
+title: "AppScan Custom Dashboard — Security Architecture"
+---
+graph TB
+    subgraph "Authentication & Authorization"
+        LOGIN["POST /auth/login\nLocal: username + role\nOIDC: external bearer"]
+        JWT["JWT Token\nsub, role, asset_group_ids, exp"]
+        RBAC["Role-Action Policy Matrix"]
+        AGF["Asset-Group Filter"]
+    end
+
+    subgraph Roles
+        R1["PlatformAdmin\n— Full access, bypasses AG filter"]
+        R2["SecurityManager\n— Full read, bypasses AG filter"]
+        R3["AppOwner\n— Scoped to assigned asset groups"]
+        R4["Developer\n— Scoped to assigned asset groups"]
+        R5["Auditor\n— Read-only, scoped to asset groups"]
+    end
+
+    subgraph "Enforcement Points"
+        E1["get_current_user()\n→ Extract JWT claims"]
+        E2["assert_action_allowed()\n→ Check role in allowed roles"]
+        E3["filter_by_asset_group()\n→ Scope results to user AGs"]
+    end
+
+    subgraph "Read-Only Guard (ASoC)"
+        RO["AsocApiClient\nGET /api/v4/* — Allowed\nPOST /api/v4/Account/ApiKeyLogin — Allowed\nAll other POST/PUT/DELETE/PATCH\n→ ReadOnlyViolationError"]
+    end
+
+    LOGIN --> JWT
+    JWT --> E1
+    E1 --> E2
+    E2 --> E3
+
+    R1 --> RBAC
+    R2 --> RBAC
+    R3 --> RBAC
+    R4 --> RBAC
+    R5 --> RBAC
+
+    RBAC --> E2
+    AGF --> E3

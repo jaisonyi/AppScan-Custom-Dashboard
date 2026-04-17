@@ -166,28 +166,43 @@ export async function getSeverityTrend(params?: Record<string, string>): Promise
   return data;
 }
 
-/* ── Endpoint management ── */
+/* ── Endpoint / Data Source management ── */
 
 export type EndpointInfo = {
-  index: number;
+  id: string;
   url: string;
   label: string;
 };
 
 export type ManagedEndpointInfo = {
-  index: number;
+  id: string;
   url: string;
   label: string;
   api_key: string;
   has_secret: boolean;
+  verify_ssl: boolean;
+  enabled: boolean;
 };
 
 export type EndpointStatusResult = {
+  id: string;
   url: string;
   label: string;
   ok: boolean;
   latency_ms: number | null;
   error: string | null;
+};
+
+export type DataSourceIdentity = {
+  id: string;
+  label: string;
+  url: string;
+  tenant_name: string | null;
+  api_user_name: string | null;
+  api_user_role: string | null;
+  api_user_email: string | null;
+  last_probed_at: string | null;
+  last_probe_ok: boolean | null;
 };
 
 export async function getEndpoints(): Promise<{ endpoints: EndpointInfo[]; total: number }> {
@@ -205,17 +220,47 @@ export async function getEndpointStatus(): Promise<{ results: EndpointStatusResu
   return data;
 }
 
-export async function createEndpoint(payload: { url: string; label: string; api_key: string; api_secret: string }): Promise<{ endpoints: ManagedEndpointInfo[]; total: number }> {
+export async function getDataSourceIdentities(opts?: { autoRefreshStale?: boolean }): Promise<{ identities: DataSourceIdentity[]; total: number }> {
+  const params: Record<string, string> = {};
+  if (opts?.autoRefreshStale) params.auto_refresh_stale = 'true';
+  const { data } = await api.get('/endpoints/identities', { params });
+  return data;
+}
+
+export async function refreshDataSourceIdentities(): Promise<{ identities: DataSourceIdentity[]; total: number }> {
+  const { data } = await api.post('/endpoints/refresh-identities');
+  return data;
+}
+
+export async function createEndpoint(payload: { url: string; label: string; api_key: string; api_secret: string; verify_ssl?: boolean }): Promise<{ endpoints: ManagedEndpointInfo[]; total: number }> {
   const { data } = await api.post('/endpoints', payload);
   return data;
 }
 
-export async function updateEndpoint(idx: number, payload: { url?: string; label?: string; api_key?: string; api_secret?: string }): Promise<{ endpoints: ManagedEndpointInfo[]; total: number }> {
-  const { data } = await api.put(`/endpoints/${idx}`, payload);
+export async function updateEndpoint(dsId: string, payload: { url?: string; label?: string; api_key?: string; api_secret?: string; verify_ssl?: boolean; enabled?: boolean }): Promise<{ endpoints: ManagedEndpointInfo[]; total: number }> {
+  const { data } = await api.put(`/endpoints/${dsId}`, payload);
   return data;
 }
 
-export async function deleteEndpoint(idx: number): Promise<{ endpoints: ManagedEndpointInfo[]; total: number }> {
-  const { data } = await api.delete(`/endpoints/${idx}`);
+export async function deleteEndpoint(dsId: string): Promise<{ endpoints: ManagedEndpointInfo[]; total: number }> {
+  const { data } = await api.delete(`/endpoints/${dsId}`);
+  return data;
+}
+
+export type WorkerStatus = {
+  running: boolean;
+  last_success_at: string | null;
+  last_error_at: string | null;
+  last_error: string | null;
+  run_count: number;
+  error_count: number;
+  next_run_at: string | null;
+  interval_seconds: number | null;
+  cache_populated: boolean;
+  cache_expires_at: string | null;
+};
+
+export async function getWorkerStatus(): Promise<WorkerStatus> {
+  const { data } = await api.get('/analytics/worker-status');
   return data;
 }

@@ -1,7 +1,6 @@
 """Unit tests for app.core.security.auth — JWT creation, decoding, and OIDC."""
 from __future__ import annotations
 
-import asyncio
 from time import time
 from unittest.mock import AsyncMock, MagicMock, patch
 

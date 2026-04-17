@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -24,6 +25,9 @@ _READ_ONLY_GET_PATH_PREFIXES = (
     "/api/v4/Roles",
 )
 _AUTH_LOGIN_PATH = "/api/v4/Account/ApiKeyLogin"
+_MAX_429_RETRIES = 3
+_BASE_429_BACKOFF_SECONDS = 0.5
+_MAX_429_BACKOFF_SECONDS = 5.0
 
 
 class AsocAuthenticationError(RuntimeError):
@@ -77,6 +81,18 @@ def _extract_token(payload: dict[str, Any]) -> str:
     return str(token)
 
 
+def _parse_retry_after_seconds(raw_value: str | None) -> float | None:
+    if not raw_value:
+        return None
+    try:
+        parsed = float(raw_value)
+    except ValueError:
+        return None
+    if parsed <= 0:
+        return None
+    return min(parsed, _MAX_429_BACKOFF_SECONDS)
+
+
 class ReadOnlyViolationError(RuntimeError):
     pass
 
@@ -95,6 +111,7 @@ class AsocApiClient:
         self._access_token: str | None = None
         self._access_token_expiry: datetime | None = None
         self._owner_user_id: str | None = None
+        self._login_succeeded: bool | None = None
         if not self._verify:
             _logger.warning(
                 "[ASoC] SSL certificate verification is DISABLED for %s. "
@@ -120,6 +137,7 @@ class AsocApiClient:
         instance._access_token = None
         instance._access_token_expiry = None
         instance._owner_user_id = None
+        instance._login_succeeded = None
         if not verify:
             _logger.warning(
                 "[ASoC] SSL certificate verification is DISABLED for %s. "
@@ -132,6 +150,11 @@ class AsocApiClient:
     def owner_user_id(self) -> str | None:
         """Return the ASoC UserId of the API key owner, populated after first login."""
         return self._owner_user_id
+
+    @property
+    def login_succeeded(self) -> bool | None:
+        """Return whether the last bearer token login attempt succeeded."""
+        return self._login_succeeded
 
     @staticmethod
     def _normalize_service_url(raw_url: str) -> str:
@@ -203,6 +226,7 @@ class AsocApiClient:
             raw_uid = payload.get("UserId") or payload.get("userId") or payload.get("user_id")
             if raw_uid:
                 self._owner_user_id = str(raw_uid).strip()
+            self._login_succeeded = True
             return token
 
     async def _get_auth_header(self) -> dict[str, str]:
@@ -213,7 +237,14 @@ class AsocApiClient:
         try:
             token = await self._login_with_api_key()
             return _build_auth_headers(token, self.api_key, self.api_secret)
-        except (AsocAuthenticationError, AsocResponseFormatError, AsocRequestError):
+        except Exception as _login_exc:
+            self._login_succeeded = False
+            _logger.warning(
+                "[ASoC] Bearer token login failed for %s (%s: %s) — falling back to X-API-KEY header",
+                self.base_url,
+                type(_login_exc).__name__,
+                _login_exc,
+            )
             return _build_auth_headers(None, self.api_key, self.api_secret)
 
     def _fallback_headers(self, current_headers: dict[str, str]) -> dict[str, str] | None:
@@ -222,25 +253,53 @@ class AsocApiClient:
             return _build_auth_headers(None, self.api_key, self.api_secret)
         return None
 
+    async def _get_with_429_retry(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        *,
+        params: dict[str, Any] | None,
+        headers: dict[str, str],
+    ) -> httpx.Response:
+        response = await client.get(path, params=params, headers=headers)
+        retry_index = 0
+        while response.status_code == 429 and retry_index < _MAX_429_RETRIES:
+            retry_after = _parse_retry_after_seconds(response.headers.get("Retry-After"))
+            delay_seconds = retry_after or min(
+                _MAX_429_BACKOFF_SECONDS,
+                _BASE_429_BACKOFF_SECONDS * (2 ** retry_index),
+            )
+            _logger.warning(
+                "[ASoC] Rate limited (429) for path %s; retrying in %.2fs (%d/%d)",
+                path,
+                delay_seconds,
+                retry_index + 1,
+                _MAX_429_RETRIES,
+            )
+            await asyncio.sleep(delay_seconds)
+            retry_index += 1
+            response = await client.get(path, params=params, headers=headers)
+        return response
+
     async def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         self._validate_request("GET", path)
         headers = await self._get_auth_header()
         async with httpx.AsyncClient(base_url=self.base_url, timeout=20.0, verify=self._verify) as client:
-            resp = await client.get(path, params=params, headers=headers)
+            resp = await self._get_with_429_retry(client, path, params=params, headers=headers)
 
             # Retry once with a refreshed bearer token on auth failure.
             if resp.status_code in {401, 403} and not headers.get("Authorization"):
                 self._access_token = None
                 self._access_token_expiry = None
                 headers = await self._get_auth_header()
-                resp = await client.get(path, params=params, headers=headers)
+                resp = await self._get_with_429_retry(client, path, params=params, headers=headers)
 
             # If response is unauthorized or non-JSON, retry once by switching auth mode.
             content_type = resp.headers.get("content-type", "")
             if resp.status_code in {401, 403} or not _is_json_response(content_type):
                 fallback_headers = self._fallback_headers(headers)
                 if fallback_headers is not None:
-                    resp = await client.get(path, params=params, headers=fallback_headers)
+                    resp = await self._get_with_429_retry(client, path, params=params, headers=fallback_headers)
                     headers = fallback_headers
                     content_type = resp.headers.get("content-type", "")
 
@@ -268,14 +327,14 @@ class AsocApiClient:
         self._validate_request("GET", path)
         headers = await self._get_auth_header()
         async with httpx.AsyncClient(base_url=self.base_url, timeout=settings.asoc_count_timeout_seconds, verify=self._verify) as client:
-            resp = await client.get(path, params=params, headers=headers)
+            resp = await self._get_with_429_retry(client, path, params=params, headers=headers)
 
             # Retry once with a refreshed bearer token on auth failure.
             if resp.status_code in {401, 403} and not headers.get("Authorization"):
                 self._access_token = None
                 self._access_token_expiry = None
                 headers = await self._get_auth_header()
-                resp = await client.get(path, params=params, headers=headers)
+                resp = await self._get_with_429_retry(client, path, params=params, headers=headers)
 
             # Retry once by switching auth mode on persistent auth failure or non-JSON.
             content_type = resp.headers.get("content-type", "")
@@ -284,7 +343,7 @@ class AsocApiClient:
             ):
                 fallback_headers = self._fallback_headers(headers)
                 if fallback_headers is not None:
-                    resp = await client.get(path, params=params, headers=fallback_headers)
+                    resp = await self._get_with_429_retry(client, path, params=params, headers=fallback_headers)
                     content_type = resp.headers.get("content-type", "")
 
             if resp.status_code in {401, 403}:

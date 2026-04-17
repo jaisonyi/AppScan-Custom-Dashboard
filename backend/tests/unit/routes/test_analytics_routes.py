@@ -241,6 +241,76 @@ class TestBuildCacheKey:
         key2 = _build_cache_key(user, **{**base_kwargs, "asset_group_ids": ["ag-2"]})
         assert key1 != key2
 
+    def test_cache_key_is_stable_hash(self):
+        from app.api.v1.routes.analytics import _build_cache_key
+
+        user = UserContext(subject="admin@test.com", role="PlatformAdmin", asset_group_ids=[])
+        base_kwargs = dict(
+            asset_group_ids=[], application_ids=[], issue_technologies=[],
+            vulnerabilities=[], scan_types=[], scan_statuses=[],
+            application_name=None, from_date=None, to_date=None,
+            compliance_rule="critical_high", compliance_threshold="high",
+        )
+        key = _build_cache_key(user, **base_kwargs)
+        assert key.startswith("analytics-bundle:")
+        assert len(key) > 20  # prefix + SHA256 hex
+
+    def test_cache_key_includes_data_source_ids(self):
+        from app.api.v1.routes.analytics import _build_cache_key
+
+        user = UserContext(subject="admin@test.com", role="PlatformAdmin", asset_group_ids=[])
+        base_kwargs = dict(
+            asset_group_ids=[], application_ids=[], issue_technologies=[],
+            vulnerabilities=[], scan_types=[], scan_statuses=[],
+            application_name=None, from_date=None, to_date=None,
+            compliance_rule="critical_high", compliance_threshold="high",
+        )
+        key_none = _build_cache_key(user, **base_kwargs, data_source_ids=None)
+        key_with = _build_cache_key(user, **base_kwargs, data_source_ids=["ds-1"])
+        assert key_none != key_with
+
+    def test_cache_key_data_source_ids_order_independent(self):
+        from app.api.v1.routes.analytics import _build_cache_key
+
+        user = UserContext(subject="admin@test.com", role="PlatformAdmin", asset_group_ids=[])
+        base_kwargs = dict(
+            asset_group_ids=[], application_ids=[], issue_technologies=[],
+            vulnerabilities=[], scan_types=[], scan_statuses=[],
+            application_name=None, from_date=None, to_date=None,
+            compliance_rule="critical_high", compliance_threshold="high",
+        )
+        key1 = _build_cache_key(user, **base_kwargs, data_source_ids=["ds-2", "ds-1"])
+        key2 = _build_cache_key(user, **base_kwargs, data_source_ids=["ds-1", "ds-2"])
+        assert key1 == key2
+
+    def test_cache_key_data_source_ids_none_vs_empty(self):
+        from app.api.v1.routes.analytics import _build_cache_key
+
+        user = UserContext(subject="admin@test.com", role="PlatformAdmin", asset_group_ids=[])
+        base_kwargs = dict(
+            asset_group_ids=[], application_ids=[], issue_technologies=[],
+            vulnerabilities=[], scan_types=[], scan_statuses=[],
+            application_name=None, from_date=None, to_date=None,
+            compliance_rule="critical_high", compliance_threshold="high",
+        )
+        key_none = _build_cache_key(user, **base_kwargs, data_source_ids=None)
+        key_empty = _build_cache_key(user, **base_kwargs, data_source_ids=[])
+        assert key_none == key_empty
+
+    def test_cache_key_differs_when_data_source_ids_differ(self):
+        from app.api.v1.routes.analytics import _build_cache_key
+
+        user = UserContext(subject="admin@test.com", role="PlatformAdmin", asset_group_ids=[])
+        base_kwargs = dict(
+            asset_group_ids=[], application_ids=[], issue_technologies=[],
+            vulnerabilities=[], scan_types=[], scan_statuses=[],
+            application_name=None, from_date=None, to_date=None,
+            compliance_rule="critical_high", compliance_threshold="high",
+        )
+        key1 = _build_cache_key(user, **base_kwargs, data_source_ids=["ds-1"])
+        key2 = _build_cache_key(user, **base_kwargs, data_source_ids=["ds-2"])
+        assert key1 != key2
+
 
 class TestIsSnapshotFresh:
     def test_is_snapshot_fresh_returns_false_for_expired(self):

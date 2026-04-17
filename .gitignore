@@ -17,14 +17,24 @@ frontend/.env
 data/*.db
 data/*.sqlite
 data/*.sqlite3
+data/exports/
 .postgres/
 
 # OS / editor
 .DS_Store
 .vscode/
+untitled folder/
 
 # Python build artifacts
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+node_modules
+
+# Lock files (frontend lock is kept)
+package-lock.json
+
+# Misc
+*.zip
+*.tar.gz

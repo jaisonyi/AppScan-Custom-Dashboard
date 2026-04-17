@@ -1,0 +1,35 @@
+---
+title: "AppScan Custom Dashboard — System Context (C4 Level 1)"
+---
+graph TB
+    subgraph Actors
+        PA["🔑 Platform Admin"]
+        SM["🛡️ Security Manager"]
+        AO["📱 App Owner"]
+        DEV["💻 Developer"]
+        AUD["📋 Auditor"]
+    end
+
+    subgraph "AppScan Custom Dashboard"
+        SYSTEM["ASPM Dashboard Platform\n(Read-Only Integration)"]
+    end
+
+    subgraph "External Systems"
+        ASOC_US["HCL AppScan on Cloud\n(US Cloud)"]
+        ASOC_EU["HCL AppScan on Cloud\n(EU Cloud)"]
+        AS360["AppScan 360\n(On-Premises)"]
+        IDP["Identity Provider\n(OIDC)"]
+        CICD["CI/CD Systems\n(Pipeline BOM)"]
+    end
+
+    PA --> SYSTEM
+    SM --> SYSTEM
+    AO --> SYSTEM
+    DEV --> SYSTEM
+    AUD --> SYSTEM
+
+    SYSTEM -->|"GET only\n(read-only enforced)"| ASOC_US
+    SYSTEM -->|"GET only\n(read-only enforced)"| ASOC_EU
+    SYSTEM -->|"GET only\n(verify_ssl configurable)"| AS360
+    SYSTEM -.->|"OIDC auth\n(optional)"| IDP
+    CICD -.->|"Pipeline BOM\nmetadata"| SYSTEM

@@ -1,4 +1,4 @@
-from typing import Annotated, Optional
+from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -14,9 +14,12 @@ _default_service = AsocReadService()
 
 
 @router.get("")
-async def list_scans(user: Annotated[UserContext, Depends(get_current_user)]) -> list[dict]:
+async def list_scans(
+    user: Annotated[UserContext, Depends(get_current_user)],
+    data_source_ids: Optional[List[str]] = Query(default=None),
+) -> list[dict]:
     assert_action_allowed("view_scans", user.role)
-    items = await aggregate_list("list_scans")
+    items = await aggregate_list("list_scans", data_source_ids=data_source_ids)
     return filter_by_asset_group(items, user.asset_group_ids, user.role, ["asset_group_id"])
 
 

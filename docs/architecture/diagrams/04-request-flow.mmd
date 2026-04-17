@@ -1,0 +1,49 @@
+---
+title: "AppScan Custom Dashboard — Multi-Data-Source Request Flow"
+---
+sequenceDiagram
+    participant U as Browser
+    participant FE as React SPA
+    participant API as FastAPI /api/v1
+    participant SEC as Security Layer
+    participant MULTI as multi_endpoint
+    participant SVC as AsocReadService
+    participant ASOC as ASoC API (v4)
+    participant DB as PostgreSQL
+
+    Note over U,DB: Request Flow — e.g. GET /api/v1/applications
+
+    U->>FE: Navigate to Applications
+    FE->>API: GET /api/v1/applications<br/>Authorization: Bearer JWT
+
+    API->>SEC: get_current_user(JWT)
+    SEC-->>API: UserContext(role, asset_group_ids)
+    API->>SEC: assert_action_allowed("view_applications", role)
+    SEC-->>API: Allowed
+
+    API->>MULTI: aggregate_list("list_applications")
+
+    Note over MULTI,ASOC: Parallel fetch from all enabled data sources
+
+    MULTI->>DB: _load_sources() — fetch enabled endpoints
+    DB-->>MULTI: [Source A, Source B]
+
+    par Source A
+        MULTI->>SVC: list_applications()
+        SVC->>ASOC: GET /api/v4/Apps (Bearer token)
+        ASOC-->>SVC: [App1, App2]
+        SVC-->>MULTI: tagged with _data_source_id
+    and Source B
+        MULTI->>SVC: list_applications()
+        SVC->>ASOC: GET /api/v4/Apps (Bearer token)
+        ASOC-->>SVC: [App3]
+        SVC-->>MULTI: tagged with _data_source_id
+    end
+
+    MULTI-->>API: merged [App1, App2, App3]
+
+    API->>SEC: filter_by_asset_group(apps, user)
+    SEC-->>API: filtered apps (role-scoped)
+
+    API-->>FE: 200 OK [filtered apps]
+    FE-->>U: Render application list

@@ -1,75 +1,60 @@
 # Coding Standards
 
-## Backend
-- Python 3.9+ runtime compatibility required (3.12 target supported)
-- Type hints required for public functions
-- Pydantic models for request and response boundaries
-- Domain logic separated from API handlers
-- For type annotations that may be evaluated at runtime, prefer `from __future__ import annotations`
-- Database schema changes must include Alembic migration files
+Last reviewed: 2026-04-15
 
-## Frontend
-- React + TypeScript
-- Feature-module folder structure
-- Shared components in `shared/`
-- Persist user interface preferences that affect landing experience (for example, dashboard view mode)
-- Avoid duplicate analytics fetches after initial bundle load; do not issue redundant chart endpoint calls on the same state transition.
-- Keep Operations Workbench readability-first layout: maximum two chart cards per row on desktop; single-column fallback on smaller screens.
-- Keep filters server-driven for correctness (do not rely on frontend-only filtering for security-sensitive counts).
+## Backend Standards
+- Python 3.9+ compatibility is required.
+- Every new module must include `from __future__ import annotations`.
+- Type hints are required for public function parameters and return values.
+- Route handlers stay thin; business logic belongs in `services/` and persistence in `repositories/`.
+- Every API route must enforce auth and authorization (`get_current_user` + `assert_action_allowed`).
+- All DB schema changes must include Alembic migration files under `backend/migrations/versions/`.
 
-## Security
-- Never log secrets
-- Enforce backend authorization checks for every data endpoint
-- ASoC connectors remain read-only by policy and by code guard
-- Do not implement mutating ASoC operations in any service or helper
+## Frontend Standards
+- React functional components + TypeScript only.
+- Feature code stays in `frontend/src/modules/`; shared abstractions in `frontend/src/shared/`.
+- Keep filters server-driven for security-sensitive counts.
+- Keep dashboard interactions responsive by avoiding duplicate analytics fetches for the same transition.
+- Preserve local UX preferences that affect initial landing state.
 
-## ASoC Integration Rules
-- Follow Swagger v4 schema and paths from `https://cloud.appscan.com/swagger/v4/swagger.json`.
-- Use `POST /api/v4/Account/ApiKeyLogin` for bearer token retrieval.
-- Use `X-API-KEY: <KeyId>:<KeySecret>` only as fallback.
-- Do not use legacy `/api/v2/*` endpoints.
-- Keep issue retrieval scoped (`/api/v4/Issues/{scope}/{scopeId}`) and aggregate in service layer.
-- Duration extractor must use a 3-phase approach: (1) seconds-named fields used as-is, (2) minutes-named fields (`ExecutionMinutes`, `DurationMinutes`, `ScanDurationMinutes`, `ExecutionTimeMinutes`, `TotalMinutes`, `ElapsedMinutes`) multiplied by 60, (3) ambiguous-named fields used as-is. ASoC commonly returns `ExecutionMinutes` not `DurationSeconds`.
-- SAST size extractor must cover all known ASoC file-count keys: `nFiles`, `NFiles`, `NumFiles`, `numFiles`, `FilesAnalyzed`, `filesAnalyzed`, `ScannedFiles`, `scannedFiles`, `AnalyzedFiles`, `analyzedFiles`, `TotalFiles`, `totalFiles`.
-- SCA size extractor must cover all known ASoC package-count keys: `nPackages`, `NPackages`, `NumPackages`, `numPackages`, `LibraryCount`, `libraryCount`, `ModuleCount`, `moduleCount`, `DirectDependencies`, `directDependencies`, `TransitiveDependencies`, `transitiveDependencies`.
-- Mock data items must use raw ASoC-style field names (e.g. `ScanType`, `ExecutionMinutes`, `NVisitedPages`) and flow through the same mapper as live data; never return raw mock dicts directly from service methods that downstream consumers expect normalized field names from.
+## Multi-Data-Source Conventions
+- Data sources are persisted in the `data_sources` table and managed through `data_source_store` / `data_source_service`.
+- Routes must retrieve active sources through `multi_endpoint._load_sources()` and never query the table directly.
+- `data_source_ids` inputs must be validated against enabled sources and capped at 20 IDs.
+- Source-level failures are warning-only and must not fail the full aggregate response.
+- Aggregated list items must carry `_data_source_id` and `_data_source_label` tags.
+- Per-source SSL policy must be forwarded via `verify_ssl` to connector creation.
 
-## Data and Performance Rules
-- Use analytics snapshot caching for expensive aggregate endpoints.
-- Expose explicit refresh flags for cache bypass when current data is required.
-- Keep scheduler retry/backoff deterministic and auditable.
-- Prefer fast stale-cache return with background refresh for default dashboard views to keep first paint responsive.
-- When cache key is cold, fallback to latest known snapshot for default view and rebuild target key asynchronously.
-- For scoped analytics filters, avoid duplicate remote issue fetches per request; reuse pre-fetched issue datasets and apply in-memory application-id filtering when possible.
-- For live refresh actions, avoid forcing rebuild on every analytics endpoint in parallel; force refresh once and read remaining sections from refreshed cache.
-- Coalesce near-simultaneous forced base-data refresh requests to prevent repeated full remote sync cycles.
-- Analytics UI loaders should degrade gracefully per endpoint (fallback to prior snapshot/state) instead of blanking the full dashboard when one request stalls or fails.
-- Refresh-triggered heavy reads must be non-blocking for visible statistics: render cached data immediately and apply refreshed values asynchronously when available.
-- Frontend API base URL and backend CORS origins must support both `localhost` and `127.0.0.1` host variants for local development to prevent silent browser-side data drops.
+## Security and Read-Only Rules
+- Never log API keys, secrets, tokens, or raw credential payloads.
+- ASoC integration remains read-only across all sources.
+- Only `POST /api/v4/Account/ApiKeyLogin` is allowed as a POST call to ASoC; all other mutating operations are blocked.
+- Avoid introducing any helper that can bypass read-only guards in the API client layer.
 
-## Workbench Analytics Contract Rules
-- Keep `/api/v1/analytics/workbench-trends` payload normalized and stable for frontend consumption.
-- Maintain compatibility hydration for legacy shapes so old snapshots do not break rendering.
-- Keep model-aware license consumption in technology rows (DAST, SAST, SCA, IAST) with explicit model metadata fields.
-- License Consumption chart view must prioritize `consumed_apps` and `consumed_scans` as primary bars for DAST/SAST/SCA/IAST.
-- Keep scan-time trend payload in normalized v2 shape with:
-	- period options: `week`, `month`, `year`
-	- bucket options: `<5m`, `5-10m`, `10-30m`, `30-60m`, `60-120m`, `120-240m`, `240-300m`, `>=300m`
-	- per-period rows that include per-bucket counts for `sast`, `sca`, `dast`, and `total`
-- Scan Time Bucket Trends chart should use line-trend rendering for selected bucket with controls for `Period` and `Time Bucket`.
-- Keep size and coverage analytics split into distribution buckets and top10 lists.
-- Frontend chart labels for top10 categories should use compact truncation rules to preserve readability on desktop and mobile.
-- DAST page coverage chart must render both `page_count` (visited pages, solid line) and `scan_count` (scans in bucket, dashed line) so the chart remains visible even when the DAST page-count cache is cold; a `<Legend>` must accompany the chart to distinguish the two series.
-- DAST page-count cache TTL must be set to `max(3600, base_cache_ttl * 4)` to ensure the enrichment cache does not expire before the base data cache; short TTL causes the `page_count` series to appear as all-zeros while `scan_count` remains populated.
+## Analytics and Performance Rules
+- Expensive analytics endpoints must use snapshot cache paths.
+- `refresh=true` paths should force rebuild once and reuse refreshed cache where possible.
+- Default dashboard loads should prefer fast cached/fallback responses and refresh asynchronously.
+- Maintain non-blocking UX behavior for analytics refresh operations.
+- Keep localhost and 127.0.0.1 origin compatibility for local CORS and frontend API usage.
 
-## Installer Packaging Rules
-- Maintain deploy scripts for Linux and macOS under `/Users/dongillee/deploy_appscan_aspm_dashboard/Linux` and `/Users/dongillee/deploy_appscan_aspm_dashboard/Mac`.
-- Installer bundles must exclude `.env`, local database files, logs, and runtime process files.
-- Installers must prompt for service URL choice (US cloud, EU cloud, custom AppScan360 URL), API key, and API secret.
-- Installers must preserve read-only ASoC behavior by setting `ASOC_READ_ONLY=true` during bootstrap.
-- Installer scripts should be idempotent for reinstall/upgrade flows and safe to rerun.
-- Installers must apply conflict-first behavior: detect port/dependency conflicts, notify user, and require confirmation before any change.
-- Uninstall scripts must default to instance-only removal and avoid deleting shared dependencies when other dashboard instances are detected.
-- HTTPS installer support is planned for the next iteration and must include both:
-	- self-signed certificate option
-	- CA-authorized certificate + domain option
+## CSV Export Conventions (v1.4.3+)
+- Export routes live in `backend/app/api/v1/routes/exports.py` and are registered under `/api/v1/export`.
+- Use `StreamingResponse` with `text/csv` content type — never buffer full datasets in memory.
+- Column definitions are declared as `_*_COLUMNS` tuples of `(key, header)` at module level.
+- Every export endpoint must enforce `get_current_user` + `assert_action_allowed` + `filter_by_asset_group`.
+- Export file names include a UTC timestamp: `{name}_{YYYYMMDD_HHMMSS}.csv`.
+- Null/missing values are written as empty strings, not `None` or `null`.
+
+## Containerization Conventions (v1.4.3+)
+- Dockerfile lives at `infra/docker/Dockerfile` and uses a multi-stage build (Node → Python).
+- Docker Compose file lives at `infra/compose/docker-compose.yml`.
+- Azure Bicep template lives at `infra/azure/main.bicep` with parameter file `main.parameters.json`.
+- Container runs as non-root user `dashboard` (UID 10001).
+- Use `gunicorn` with `uvicorn.workers.UvicornWorker` in production; `uvicorn --reload` for local dev only.
+
+## ASoC Mapping Rules
+- Follow Swagger v4 endpoints (`/api/v4/*`) only.
+- Keep issue retrieval scoped through `/api/v4/Issues/{scope}/{scopeId}` and aggregate in service layer.
+- Continue mapping variant source fields for duration, file size, and package size normalization.
+- Mock-mode scan records must pass through the same normalization pipeline as live ASoC records.

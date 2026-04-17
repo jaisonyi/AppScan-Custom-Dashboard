@@ -1,0 +1,71 @@
+---
+title: "AppScan Custom Dashboard — Backend Component View (C4 Level 3)"
+---
+graph LR
+    subgraph "API Layer (app/api/v1/routes/)"
+        R_AUTH["auth.py\nLogin / Mode"]
+        R_APP["applications.py"]
+        R_SCAN["scans.py"]
+        R_ISSUE["issues.py"]
+        R_AG["asset_groups.py"]
+        R_ANALYTICS["analytics.py\nBundle / Chart / Issue Counts"]
+        R_DASH["dashboard.py\nCRUD + Widgets"]
+        R_REPORT["reports.py\nTemplates / Schedules"]
+        R_AUDIT["audit.py"]
+        R_EP["endpoints.py\nData Source CRUD + Probe"]
+        R_BOM["pipeline_bom.py"]
+    end
+
+    subgraph "Security Layer (app/core/security/)"
+        AUTH["auth.py\nJWT create/decode\nOIDC JWKS"]
+        DEPS["dependencies.py\nget_current_user"]
+        POLICY["policy.py\nassert_action_allowed\nRole-Action matrix"]
+        AUTHZ["authorization.py\nfilter_by_asset_group\nassert_asset_group_access"]
+    end
+
+    subgraph "Service Layer (app/services/)"
+        SVC_READ["asoc_read_service.py\nlist_scans, list_apps,\nlist_issues, list_asset_groups"]
+        SVC_MULTI["multi_endpoint.py\naggregate_list()\naggregate_base_data()"]
+        SVC_ISSUE["issue_count_service.py\nCount-first analytics"]
+        SVC_REPORT["report_artifacts.py\nJSON generation"]
+        SVC_DS["data_source_service.py\nData source management"]
+    end
+
+    subgraph "Integration (app/integrations/)"
+        CLIENT["AsocApiClient\nRead-only enforced\nhttpx async\nBearer + API-Key auth"]
+    end
+
+    subgraph "Repository (app/repositories/)"
+        PG["postgres_store.py\nSQLAlchemy 2.0+\nThread-safe connection"]
+        DS_STORE["data_source_store.py\nData source configs"]
+    end
+
+    subgraph "Workers (app/workers/)"
+        W_SCHED["report_scheduler.py\nCron-based with\nexponential backoff"]
+        W_WARM["analytics_prewarm.py\nCache prewarm on\ninterval"]
+    end
+
+    R_AUTH --> AUTH
+    R_APP --> DEPS
+    R_APP --> POLICY
+    R_APP --> AUTHZ
+    R_APP --> SVC_MULTI
+    R_SCAN --> SVC_MULTI
+    R_ISSUE --> SVC_MULTI
+    R_AG --> SVC_MULTI
+    R_ANALYTICS --> SVC_ISSUE
+    R_ANALYTICS --> SVC_MULTI
+    R_EP --> SVC_DS
+
+    SVC_MULTI --> SVC_READ
+    SVC_READ --> CLIENT
+    SVC_DS --> DS_STORE
+
+    R_DASH --> PG
+    R_REPORT --> PG
+    R_REPORT --> SVC_REPORT
+    R_AUDIT --> PG
+
+    W_SCHED --> PG
+    W_SCHED --> SVC_REPORT
+    W_WARM --> SVC_MULTI
