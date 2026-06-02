@@ -26,14 +26,14 @@
 3. Per-source failures logged at WARNING; partial results returned from healthy sources.
 4. Analytics pipelines use `aggregate_base_data()` with same source filtering and cache key scoping.
 
-## CSV Export Components (v1.4.3+)
+## CSV Export Components (v1.5e)
 - **Export Routes** (`exports.py`): four `GET` endpoints producing streaming CSV via `StreamingResponse`
 - Column definitions: `_SCAN_COLUMNS`, `_APP_COLUMNS`, `_ISSUE_COLUMNS` with `(key, header)` tuples
 - `summary.csv` returns a KPI pivot table (Metric/Value rows) + Top 20 Applications breakdown
 - Reuses `aggregate_list()`, `aggregate_issue_counts()`, `aggregate_top_apps()` from existing domain services
 - Auth: `get_current_user` + `assert_action_allowed()` per endpoint; `filter_by_asset_group()` on all list data
 
-## Infrastructure Components (v1.4.3+)
+## Infrastructure Components (v1.5e)
 - **Dockerfile** (`infra/docker/Dockerfile`): multi-stage build — Node 20-alpine (frontend) → Python 3.12-slim (runtime), gunicorn + uvicorn workers, non-root user
 - **Docker Compose** (`infra/compose/docker-compose.yml`): PostgreSQL 16-alpine + dashboard app, environment-driven config
 - **Azure Bicep** (`infra/azure/main.bicep`): App Service + PostgreSQL Flexible Server + Key Vault (RBAC) + Application Insights

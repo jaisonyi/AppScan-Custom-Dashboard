@@ -66,7 +66,7 @@ python3 -m pytest tests/unit --collect-only -q | grep -E "::test_" | wc -l
 2. Role-matrix authorization checks.
 3. Auth-mode checks (`local` and `oidc` behavior).
 
-## CSV Export Test Areas (v1.4.3+)
+## CSV Export Test Areas (v1.5e)
 - Unit: verify CSV column headers and row content for each export endpoint.
 - Unit: verify auth enforcement (reject unauthenticated and unauthorized requests).
 - Unit: verify asset-group scoping filters items correctly.
@@ -74,7 +74,7 @@ python3 -m pytest tests/unit --collect-only -q | grep -E "::test_" | wc -l
 - Unit: verify `summary.csv` KPI pivot structure (Metric/Value format).
 - Integration: verify streaming response produces valid CSV parseable by standard CSV libraries.
 
-## Containerization Test Areas (v1.4.3+)
+## Containerization Test Areas (v1.5e)
 - Docker build: `docker build -f infra/docker/Dockerfile .` completes without errors.
 - Docker Compose: `docker compose up -d` starts both PostgreSQL and dashboard containers.
 - Health endpoint: `curl http://localhost:8000/health` returns 200 from containerized app.

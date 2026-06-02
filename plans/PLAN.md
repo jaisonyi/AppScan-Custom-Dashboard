@@ -1,4 +1,4 @@
-# ASOC ASPM Dashboard v1.3.1 — Backend Unit Test Plan
+# AppScan ASPM Dashboard v1.3.1 — Backend Unit Test Plan
 
 > **Architect:** This document defines the complete test architecture for the backend.
 > **Lead Developer:** Implement each file in the priority order defined in §6.

@@ -19,9 +19,9 @@ _DAST_PAGE_REFRESH_CURSOR = 0
 _DAST_PAGE_CACHE_TTL_SECONDS = max(3600, int(getattr(settings, "analytics_cache_ttl_seconds", 180) or 180) * 4)
 _DAST_PAGE_ERROR_TTL_SECONDS = 120
 _DAST_PAGE_REFRESH_LIMIT = 500
-_DAST_PAGE_REFRESH_TIMEOUT_SECONDS = 20.0
-_DAST_PAGE_FETCH_TIMEOUT_SECONDS = 4.0
-_DAST_PAGE_REFRESH_CONCURRENCY = 6
+_DAST_PAGE_REFRESH_TIMEOUT_SECONDS = 60.0
+_DAST_PAGE_FETCH_TIMEOUT_SECONDS = 6.0
+_DAST_PAGE_REFRESH_CONCURRENCY = 15
 
 
 def _extract_items(payload: Any) -> list[dict[str, Any]]:
@@ -592,9 +592,28 @@ class AsocReadService:
             if isinstance(item, dict):
                 hydrated.append(dict(item))
 
+        # Phase 1: apply any existing cached page-coverage values.
         await self._apply_cached_dast_coverage(hydrated)
+
         if schedule_refresh:
+            # Phase 2: kick off the refresh — this populates _DAST_PAGE_CACHE.
             await self._schedule_dast_coverage_refresh(hydrated)
+
+            # Phase 3: await the refresh task so the *current* request
+            # benefits from freshly fetched page-coverage values instead
+            # of returning all-zeros on first load.
+            if _DAST_PAGE_REFRESH_TASK is not None and not _DAST_PAGE_REFRESH_TASK.done():
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(_DAST_PAGE_REFRESH_TASK),
+                        timeout=_DAST_PAGE_REFRESH_TIMEOUT_SECONDS + 5.0,
+                    )
+                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                    pass  # best-effort; partial cache is still useful
+
+            # Phase 4: re-apply cache — now includes values the refresh just wrote.
+            await self._apply_cached_dast_coverage(hydrated)
+
         return hydrated
 
     async def _schedule_dast_coverage_refresh(self, scans: list[dict[str, Any]]) -> None:
@@ -677,33 +696,67 @@ class AsocReadService:
 
     async def _refresh_dast_coverage_cache(self, scans: list[dict[str, Any]]) -> None:
         global _DAST_PAGE_REFRESH_TASK
+        import logging as _logging
+        _logger = _logging.getLogger(__name__)
 
         semaphore = asyncio.Semaphore(max(2, _DAST_PAGE_REFRESH_CONCURRENCY))
+
+        async def _try_endpoint(endpoint: str) -> tuple[int, str]:
+            """Call a single ASoC endpoint and extract page coverage.
+
+            Returns ``(pages, source_label)``.
+            """
+            try:
+                payload = await asyncio.wait_for(
+                    self._client.get(endpoint),
+                    timeout=_DAST_PAGE_FETCH_TIMEOUT_SECONDS,
+                )
+                pages = self._extract_dast_visited_pages(payload)
+                return _safe_int(pages, 0), endpoint
+            except asyncio.TimeoutError:
+                _logger.debug("dast_page_refresh: timeout for %s", endpoint)
+                return 0, ""
+            except Exception as exc:
+                _logger.debug("dast_page_refresh: error for %s: %s", endpoint, exc)
+                return 0, ""
 
         async def _fetch(scan: dict[str, Any]) -> tuple[str, int, str]:
             scan_id = str(scan.get("id", "")).strip()
             if not scan_id:
                 return "", 0, "invalid"
 
-            # Use DastExecution/{exec_id} which is the only ASoC Cloud endpoint
-            # that returns NVisitedPages. Fall back to the legacy scan-detail
-            # endpoint if exec_id was not recorded.
             exec_id = str(scan.get("exec_id", "")).strip()
-            endpoint = (
-                f"/api/v4/Scans/DastExecution/{exec_id}"
-                if exec_id
-                else f"/api/v4/Scans/Dast/{scan_id}"
-            )
+
+            # Build a prioritised list of endpoints to try.
+            # The first one to return pages > 0 wins; if all return 0 we
+            # record 0 with a short TTL so it's retried later.
+            endpoints: list[str] = []
+            if exec_id:
+                endpoints.append(f"/api/v4/Scans/DastExecution/{exec_id}")
+            endpoints.append(f"/api/v4/Scans/Dast/{scan_id}")
+            endpoints.append(f"/api/v4/Scans/{scan_id}/LatestExecution")
+            endpoints.append(f"/api/v4/Scans/{scan_id}")
+
             async with semaphore:
-                try:
-                    payload = await asyncio.wait_for(
-                        self._client.get(endpoint),
-                        timeout=_DAST_PAGE_FETCH_TIMEOUT_SECONDS,
-                    )
-                    pages = self._extract_dast_visited_pages(payload)
-                    return scan_id, _safe_int(pages, 0), "dast_execution_detail"
-                except Exception:
-                    return scan_id, 0, "error"
+                for ep in endpoints:
+                    pages, source = await _try_endpoint(ep)
+                    if pages > 0:
+                        _logger.debug(
+                            "dast_page_refresh: scan=%s pages=%d via %s",
+                            scan_id, pages, source,
+                        )
+                        return scan_id, pages, source
+
+                # None of the endpoints returned a positive page count.
+                _logger.debug(
+                    "dast_page_refresh: scan=%s pages=0 after trying %d endpoints",
+                    scan_id, len(endpoints),
+                )
+                return scan_id, 0, "none"
+
+        _logger.info(
+            "dast_page_refresh: starting refresh for %d candidates", len(scans),
+        )
 
         try:
             results = await asyncio.wait_for(
@@ -711,12 +764,14 @@ class AsocReadService:
                 timeout=_DAST_PAGE_REFRESH_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
+            _logger.warning("dast_page_refresh: overall gather timed out after %.0fs", _DAST_PAGE_REFRESH_TIMEOUT_SECONDS)
             return
         finally:
             if _DAST_PAGE_REFRESH_TASK is not None and _DAST_PAGE_REFRESH_TASK.done():
                 _DAST_PAGE_REFRESH_TASK = None
 
         now = datetime.now(timezone.utc)
+        success_count = 0
         async with _DAST_PAGE_CACHE_LOCK:
             for item in results:
                 if isinstance(item, Exception):
@@ -724,6 +779,8 @@ class AsocReadService:
                 scan_id, pages, source = item
                 if not scan_id:
                     continue
+                if pages > 0:
+                    success_count += 1
                 ttl = _DAST_PAGE_CACHE_TTL_SECONDS if pages > 0 else _DAST_PAGE_ERROR_TTL_SECONDS
                 _DAST_PAGE_CACHE[scan_id] = {
                     "visited_pages": _safe_int(pages, 0),
@@ -732,6 +789,10 @@ class AsocReadService:
                     "source": source,
                 }
 
+        _logger.info(
+            "dast_page_refresh: finished — %d/%d scans got page_coverage > 0",
+            success_count, len(scans),
+        )
         _DAST_PAGE_REFRESH_TASK = None
 
     @staticmethod

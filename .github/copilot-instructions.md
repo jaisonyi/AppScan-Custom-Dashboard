@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Monorepo for the **AppScan Custom Dashboard** (ASoC ASPM Dashboard) — a read-only integration dashboard for HCL AppScan on Cloud (ASoC). Provides role-scoped and asset-group-scoped visibility into application security posture.
+Monorepo for the **AppScan Custom Dashboard** (AppScan ASPM Dashboard) — a read-only integration dashboard for HCL AppScan (ASoC and AppScan 360). Provides role-scoped and asset-group-scoped visibility into application security posture.
 
 **Core rule**: Read-only access to ASoC — all mutations are blocked at the API client layer.
 

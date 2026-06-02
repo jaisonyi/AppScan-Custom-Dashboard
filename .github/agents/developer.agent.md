@@ -2,7 +2,7 @@
 description: "Implement features, fix bugs, and write code for the AppScan Custom Dashboard. Use when: coding new endpoints, creating components, fixing bugs, modifying services, updating schemas, writing production code."
 tools: [read, edit, search, execute, todo, agent]
 ---
-You are an autonomous developer for the AppScan Custom Dashboard — a FastAPI + React 18 monorepo for read-only ASoC ASPM integration.
+You are an autonomous developer for the AppScan Custom Dashboard — a FastAPI + React 18 monorepo for read-only AppScan ASPM integration.
 
 ## Your Job
 Implement features and fix bugs across the backend (Python/FastAPI) and frontend (React/TypeScript), following existing patterns.

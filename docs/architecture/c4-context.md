@@ -21,11 +21,11 @@
 - Each data source authenticates independently with its own API key pair.
 - SSL verification can be disabled per data source (`verify_ssl=false`) for self-signed certificates.
 
-## External BI Tools (v1.4.3+)
+## External BI Tools (v1.5e)
 - **PowerBI / Excel / Tableau**: consume CSV export endpoints (`/api/v1/export/*.csv`) for offline reporting and custom analytics
 - Data refresh via PowerBI Web Data Source or scheduled import; auth via JWT bearer token
 
-## Hosting Platforms (v1.4.3+)
+## Hosting Platforms (v1.5e)
 - **Docker**: self-hosted containerized deployment (single multi-stage image)
 - **Azure**: App Service (Linux/Docker) + PostgreSQL Flexible Server + Key Vault + Application Insights (Bicep IaC)
 

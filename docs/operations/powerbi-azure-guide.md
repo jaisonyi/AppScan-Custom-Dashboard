@@ -1,6 +1,6 @@
 # Power BI Integration & Azure Deployment Guide
 
-**Version**: 1.4.3 | **Last updated**: 2026-04-17
+**Version**: 1.5e | **Last updated**: 2026-04-17
 
 ---
 

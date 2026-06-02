@@ -32,14 +32,14 @@ Last reviewed: 2026-04-15
 - Partial upstream failures degrade gracefully without full endpoint failure.
 - `verify_ssl` behavior is validated for per-source configuration.
 
-## CSV Export Criteria (v1.4.3+)
+## CSV Export Criteria (v1.5e)
 - Export endpoints enforce auth (`get_current_user`) and authorization (`assert_action_allowed`).
 - Export responses use `StreamingResponse` with `text/csv` content type.
 - Asset-group scoping is applied via `filter_by_asset_group`.
 - CSV headers match the `_*_COLUMNS` definitions in `exports.py`.
 - Null values are written as empty strings.
 
-## Containerization Criteria (v1.4.3+)
+## Containerization Criteria (v1.5e)
 - Dockerfile builds successfully in CI.
 - Container runs as non-root user.
 - Health check endpoint (`/health`) returns 200.

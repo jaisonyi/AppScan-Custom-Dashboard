@@ -7,7 +7,7 @@
 
 These are user-provided and modifiable through environment configuration.
 
-## Multi-Data-Source Credentials (v1.4.0+)
+## Multi-Data-Source Credentials (v1.5e)
 - Additional data source credentials (URL, API key, API secret) are stored in the `data_sources` PostgreSQL table.
 - Each data source has independent credentials for authentication against its ASoC/AppScan 360 instance.
 - Credentials are managed via the `/api/v1/endpoints` CRUD routes (PlatformAdmin/SecurityManager role required).

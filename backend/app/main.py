@@ -15,7 +15,7 @@ from app.services import data_source_service
 from app.workers.analytics_prewarm import run_analytics_prewarm
 from app.workers.report_scheduler import run_scheduler
 
-app = FastAPI(title="ASoC ASPM API", version="1.3.0")
+app = FastAPI(title="AppScan ASPM API", version="1.5e")
 
 
 def _resolve_cors_origins() -> list[str]:

@@ -79,7 +79,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/endpoints/<id>/check-status \
   ```
 - **Configuration**: The staleness TTL is controlled by `identity_probe_ttl_seconds` in settings (default: 86400 seconds / 24 hours).
 
-## CSV Export Operations (v1.4.3+)
+## CSV Export Operations (v1.5e)
 
 ### Health Check
 ```bash
@@ -104,7 +104,7 @@ curl -sS -o /dev/null -w "%{http_code}" \
 | `GET /api/v1/export/issues.csv` | Issues with CWE/location/dates |
 | `GET /api/v1/export/summary.csv` | KPI pivot table + Top 20 apps |
 
-## Docker Deployment Operations (v1.4.3+)
+## Docker Deployment Operations (v1.5e)
 
 ### Container Health
 ```bash
@@ -135,7 +135,7 @@ docker compose build --no-cache dashboard
 docker compose up -d
 ```
 
-## Azure Deployment Operations (v1.4.3+)
+## Azure Deployment Operations (v1.5e)
 
 ### Monitoring
 - Application Insights is provisioned with the Bicep template.

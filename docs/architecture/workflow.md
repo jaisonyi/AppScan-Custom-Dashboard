@@ -41,7 +41,7 @@ API --> Multi[multi_endpoint.py]
 Multi -->|_load_sources| DSStore
 Multi -->|aggregate_list| ASoC
 ```
-## CSV Export Flow (v1.4.3+)
+## CSV Export Flow (v1.5e)
 
 ```mermaid
 flowchart LR
@@ -55,7 +55,7 @@ Scoped -->|StreamingResponse| CSV[CSV Output]
 CSV -->|text/csv| BI
 ```
 
-## Docker / Azure Deployment Flow (v1.4.3+)
+## Docker / Azure Deployment Flow (v1.5e)
 
 ```mermaid
 flowchart TD

@@ -38,7 +38,7 @@ Last reviewed: 2026-04-15
 - Maintain non-blocking UX behavior for analytics refresh operations.
 - Keep localhost and 127.0.0.1 origin compatibility for local CORS and frontend API usage.
 
-## CSV Export Conventions (v1.4.3+)
+## CSV Export Conventions (v1.5e)
 - Export routes live in `backend/app/api/v1/routes/exports.py` and are registered under `/api/v1/export`.
 - Use `StreamingResponse` with `text/csv` content type — never buffer full datasets in memory.
 - Column definitions are declared as `_*_COLUMNS` tuples of `(key, header)` at module level.
@@ -46,7 +46,7 @@ Last reviewed: 2026-04-15
 - Export file names include a UTC timestamp: `{name}_{YYYYMMDD_HHMMSS}.csv`.
 - Null/missing values are written as empty strings, not `None` or `null`.
 
-## Containerization Conventions (v1.4.3+)
+## Containerization Conventions (v1.5e)
 - Dockerfile lives at `infra/docker/Dockerfile` and uses a multi-stage build (Node → Python).
 - Docker Compose file lives at `infra/compose/docker-compose.yml`.
 - Azure Bicep template lives at `infra/azure/main.bicep` with parameter file `main.parameters.json`.

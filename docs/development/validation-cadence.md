@@ -46,7 +46,7 @@ A milestone is complete only when all four teams sign off against acceptance cri
 - Current User pane continues to show `/api/v4/User` identity with tenant metadata enrichment.
 - Endpoints management UX is validated for `/api/v1/endpoints`, `/api/v1/endpoints/manage`, `/api/v1/endpoints/status`, and identity refresh flows.
 
-## CSV Export Validation (v1.4.3+)
+## CSV Export Validation (v1.5e)
 - `GET /api/v1/export/scans.csv` returns 200 with valid CSV headers and rows.
 - `GET /api/v1/export/applications.csv` returns 200 with valid CSV headers and rows.
 - `GET /api/v1/export/issues.csv` returns 200 with valid CSV headers and rows.
@@ -57,7 +57,7 @@ A milestone is complete only when all four teams sign off against acceptance cri
 - `data_source_ids` parameter scopes exports to selected sources.
 - CSV output is parseable by PowerBI, Excel, and standard CSV libraries.
 
-## Container and Deployment Validation (v1.4.3+)
+## Container and Deployment Validation (v1.5e)
 - `docker build -f infra/docker/Dockerfile .` succeeds.
 - `docker compose -f infra/compose/docker-compose.yml up -d` starts both containers.
 - `curl http://localhost:8000/health` returns 200 from containerized app.

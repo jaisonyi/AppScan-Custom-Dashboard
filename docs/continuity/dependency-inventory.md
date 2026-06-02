@@ -12,15 +12,15 @@
 - Recharts
 - Axios
 
-## Internal Modules (v1.4.0+)
+## Internal Modules (v1.5e)
 - `data_source_store.py` — CRUD for the `data_sources` PostgreSQL table
 - `multi_endpoint.py` — parallel aggregation across configured data sources
 - `asoc_read_service.py` — read-only ASoC/AppScan 360 connector with `verify_ssl` support
 
-## Internal Modules (v1.4.3+)
+## Internal Modules (v1.5e)
 - `exports.py` — streaming CSV export routes for scans, applications, issues, and summary
 
-## Infrastructure Dependencies (v1.4.3+)
+## Infrastructure Dependencies (v1.5e)
 - Docker 24+ / Docker Compose v2 — local container stack (`infra/compose/`)
 - gunicorn + uvicorn workers — production ASGI server inside container
 - Node 20-alpine — frontend build stage in multi-stage Dockerfile

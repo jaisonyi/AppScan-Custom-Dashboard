@@ -13,13 +13,13 @@
 - `multi_endpoint.py` service: aggregates data from all enabled data sources with parallel fetch and per-source failure isolation
 - `AsocReadService.for_endpoint()`: creates per-source API client instances with correct SSL verification settings
 
-## CSV Export Layer (v1.4.3+)
+## CSV Export Layer (v1.5e)
 - `exports.py` routes: four streaming CSV endpoints under `/api/v1/export` for PowerBI / Excel / Tableau integration
 - Endpoints: `scans.csv`, `applications.csv`, `issues.csv`, `summary.csv`
 - Reuses the same read-only aggregation pipeline (`aggregate_list()`, `filter_by_asset_group()`) as the dashboard UI
 - Auth enforced on every endpoint; asset-group scoping applied
 
-## Deployment Topology (v1.4.3+)
+## Deployment Topology (v1.5e)
 - **Docker**: Multi-stage `Dockerfile` produces a single container (Node build → Python 3.12-slim runtime)
 - **Docker Compose**: Local stack with PostgreSQL 16-alpine + dashboard app container
 - **Azure Bicep**: Production stack — App Service (Linux/Docker), PostgreSQL Flexible Server, Key Vault, Application Insights

@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the ASOC ASPM Dashboard backend test suite."""
+"""Shared pytest fixtures for the AppScan ASPM Dashboard backend test suite."""
 from __future__ import annotations
 
 import pytest

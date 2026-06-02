@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.5e] - 2026-04-17
+
+### Changed
+- **Version bump to v1.5e** — consolidates all v1.4.x releases
+- **Product title updated**: "ASoC ASPM" → "AppScan ASPM" to reflect support for both HCL AppScan on Cloud (ASoC) and HCL AppScan 360
+- UI labels updated: sidebar brand, status bar, page title, API access header now reference "AppScan" instead of "ASoC" only
+- All documentation updated to reflect dual-platform support
+
+---
+
 ## [1.4.3] - 2026-04-17
 
 ### Added

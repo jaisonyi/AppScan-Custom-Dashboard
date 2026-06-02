@@ -100,7 +100,7 @@
 ## First Login
 - Use bootstrap login endpoint in local mode, then map role and accessible asset groups.
 
-## Multi-Data-Source Configuration (v1.4.0+)
+## Multi-Data-Source Configuration (v1.5e)
 After initial setup, additional ASoC/AppScan 360 instances can be configured through the dashboard UI or API.
 
 ### Via Dashboard UI
@@ -139,7 +139,7 @@ curl http://127.0.0.1:8000/api/v1/endpoints \
 - If mode is `oidc`, provide external bearer token from your IdP in the frontend token input.
 - If OIDC settings are missing and mode is `oidc`, protected routes return `503` with missing fields.
 
-## Docker Compose Deployment (v1.4.3+)
+## Docker Compose Deployment (v1.5e)
 
 A single-command local stack is available via Docker Compose.
 
@@ -179,7 +179,7 @@ docker compose down        # stop containers
 docker compose down -v     # stop + remove volumes (deletes DB data)
 ```
 
-## Azure Deployment (v1.4.3+)
+## Azure Deployment (v1.5e)
 
 An Azure Bicep template deploys the production stack: App Service, PostgreSQL Flexible Server, Key Vault, and Application Insights.
 
@@ -212,7 +212,7 @@ az deployment group create \
 2. Set ASoC credentials in Key Vault secrets.
 3. Verify `https://<webAppUrl>/health`.
 
-## CSV Export for PowerBI / Excel (v1.4.3+)
+## CSV Export for PowerBI / Excel (v1.5e)
 
 Four streaming CSV endpoints are available for external BI tool integration.
 

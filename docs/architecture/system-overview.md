@@ -98,7 +98,7 @@ Deliver an extensible ASPM dashboard for HCL AppScan on Cloud with role-aware an
 - Dashboard first-page view mode (`General`, `Larger Chart`, `SOC Style`) is persisted in browser local storage.
 - Users return to their preferred default view automatically on reload.
 
-## CSV Export for External BI Tools (v1.4.3+)
+## CSV Export for External BI Tools (v1.5e)
 - Four streaming CSV endpoints under `/api/v1/export` provide PowerBI / Excel / Tableau-friendly data extraction.
 - Endpoints: `scans.csv`, `applications.csv`, `issues.csv`, `summary.csv`.
 - Each endpoint reuses the same read-only aggregation (`aggregate_list()`, `aggregate_issue_counts()`, `aggregate_top_apps()`) and asset-group scoping (`filter_by_asset_group()`) as the dashboard UI.
@@ -108,7 +108,7 @@ Deliver an extensible ASPM dashboard for HCL AppScan on Cloud with role-aware an
 - `summary.csv` is a KPI pivot table (Metric/Value rows) followed by a Top 20 Applications breakdown.
 - No new ASoC API calls introduced — export endpoints consume the same cached / aggregated data as the UI.
 
-## Containerization and Cloud Deployment (v1.4.3+)
+## Containerization and Cloud Deployment (v1.5e)
 - **Docker**: Multi-stage `Dockerfile` at `infra/docker/Dockerfile`.
   - Stage 1: Node 20-alpine builds the React frontend (`npm ci && npm run build`).
   - Stage 2: Python 3.12-slim production image with gunicorn + uvicorn workers, non-root `dashboard` user, healthcheck on `/health`.

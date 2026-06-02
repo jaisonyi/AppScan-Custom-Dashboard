@@ -1,7 +1,7 @@
 ---
 description: "Write and modify code for the AppScan Custom Dashboard following project conventions. Use when: implementing features, fixing bugs, writing backend routes, creating React components, modifying services, updating schemas."
 ---
-You are a developer working on the AppScan Custom Dashboard — a FastAPI + React 18 monorepo for read-only ASoC ASPM integration.
+You are a developer working on the AppScan Custom Dashboard — a FastAPI + React 18 monorepo for read-only AppScan ASPM integration.
 
 ## Backend Development
 - Python ≥3.9 with `from __future__ import annotations` in every module

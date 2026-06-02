@@ -1807,7 +1807,7 @@ export function App() {
     <div className={`page page-overview mode-${viewMode}`}>
       <div className="overview-layout">
         <aside className="overview-sidebar">
-          <div className="sidebar-brand">ASPM Console</div>
+          <div className="sidebar-brand">AppScan Console</div>
           <nav className="sidebar-nav">
             <button className={scopePanel === null ? 'sidebar-link active' : 'sidebar-link'} onClick={() => setScopePanel(null)}>
               Dashboard
@@ -2281,7 +2281,7 @@ export function App() {
               </header>
               {endpoints.length === 0 ? (
                 <div className="sidebar-filter-empty" role="status">
-                  No ASoC endpoints configured. Click <strong>Manage</strong> below to add one.
+                  No AppScan endpoints configured. Click <strong>Manage</strong> below to add one.
                 </div>
               ) : (
                 <div className="sidebar-filter-list">
@@ -2379,9 +2379,9 @@ export function App() {
           ) : null}
 
           {dataSourceIdentities.length > 0 && (
-            <div className="sidebar-api-access" aria-label="ASoC API access identities">
+            <div className="sidebar-api-access" aria-label="AppScan API access identities">
               <span className="sidebar-api-access-header">
-                ASoC API Access ({dataSourceIdentities.length} source{dataSourceIdentities.length !== 1 ? 's' : ''})
+                AppScan API Access ({dataSourceIdentities.length} source{dataSourceIdentities.length !== 1 ? 's' : ''})
               </span>
               {dataSourceIdentities.map((ds) => {
                 const dotColor = ds.last_probe_ok === true ? '#22c55e' : ds.last_probe_ok === false ? '#ef4444' : '#64748b';
@@ -3565,7 +3565,7 @@ export function App() {
               )}
             </>
           ) : workerStatus.error_count > 0 ? (
-            <>&#9888;&nbsp;Sync issues — check ASoC connectivity</>
+            <>&#9888;&nbsp;Sync issues — check AppScan connectivity</>
           ) : (
             <>&#9679;&nbsp;Awaiting first sync&#8230;</>
           )}

@@ -1,7 +1,7 @@
 [project]
-name = "asoc-aspm-backend"
-version = "0.1.0"
-description = "ASoC ASPM Dashboard backend"
+name = "appscan-aspm-backend"
+version = "1.5.0"
+description = "AppScan ASPM Dashboard backend — supports ASoC and AppScan 360"
 requires-python = ">=3.9"
 dependencies = [
   "fastapi>=0.116.0",
